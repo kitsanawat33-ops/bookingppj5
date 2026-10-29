@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ระบบลงเลขหนังสือ</title>
+<meta name="description" content="ลงเลขหนังสือส่ง บันทึกข้อความ คำสั่ง และทะเบียนรับของโรงเรียน">
+<meta name="theme-color" content="#2f7a68">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="ลงเลขหนังสือ">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<script src="config.js"></script>
+<style>
+:root{--bg:#f4f6f4;--text:#1c2421;--muted:#66716c;--faint:#9aa39f;--accent:#2f7a68;--accent-soft:#e7f2ee;--border:#e3e8e5}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+  font-family:'IBM Plex Sans Thai','Sarabun',system-ui,-apple-system,'Segoe UI',sans-serif;-webkit-font-smoothing:antialiased;overflow:hidden}
+#app{position:fixed;inset:0;padding:env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);background:var(--bg)}
+#frame{width:100%;height:100%;border:0;display:block;opacity:0;transition:opacity .25s}
+#frame.ready{opacity:1}
+.screen{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center;background:var(--bg);z-index:5}
+.screen img{width:84px;height:84px;border-radius:20px;box-shadow:0 8px 24px rgba(47,122,104,.25)}
+.screen h1{margin:6px 0 0;font-size:20px;font-weight:600}
+.screen p{margin:0;color:var(--muted);font-size:14.5px;max-width:340px;line-height:1.6}
+.spin{width:22px;height:22px;border:2.5px solid var(--accent);border-right-color:transparent;border-radius:50%;animation:sp .8s linear infinite;margin-top:6px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.btn{border:0;background:var(--accent);color:#fff;font:inherit;font-weight:600;font-size:15px;border-radius:12px;padding:11px 22px;cursor:pointer}
+.btn.ghost{background:#fff;color:var(--text);border:1px solid var(--border)}
+.slow{font-size:13px;color:var(--faint)}
+.slow a{color:var(--accent);cursor:pointer;text-decoration:underline}
+code{background:#fff;border:1px solid var(--border);border-radius:6px;padding:1px 6px;font-size:13px}
+
+/* install banner */
+.install{position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:10;max-width:460px;margin:0 auto;
+  background:#fff;border:1px solid var(--border);border-radius:16px;box-shadow:0 12px 32px rgba(0,0,0,.14);padding:12px 14px;display:flex;gap:12px;align-items:center;animation:up .3s ease}
+@keyframes up{from{transform:translateY(20px);opacity:0}to{transform:none;opacity:1}}
+.install img{width:44px;height:44px;border-radius:11px;flex:none}
+.install .tx{flex:1;min-width:0;font-size:13.5px;line-height:1.45}
+.install .tx b{display:block;font-size:14.5px}
+.install .tx span{color:var(--muted)}
+.install .x{border:0;background:none;color:var(--faint);font-size:20px;cursor:pointer;padding:4px 6px;line-height:1}
+.install .btn{padding:8px 14px;font-size:14px;border-radius:10px;white-space:nowrap}
+.share{display:inline-block;vertical-align:-3px}
+</style>
+</head>
+<body>
+<div id="app"><iframe id="frame" title="ระบบลงเลขหนังสือ" allow="clipboard-read; clipboard-write; fullscreen"></iframe></div>
+
+<!-- กำลังโหลด -->
+<div class="screen" id="splash">
+  <img src="icons/icon-192.png" alt="">
+  <h1 id="appName">ระบบลงเลขหนังสือ</h1>
+  <p id="schoolName"></p>
+  <div class="spin"></div>
+  <div class="slow" id="slow" hidden>โหลดนานกว่าปกติ · <a id="retry1">ลองใหม่</a></div>
+</div>
+
+<!-- ออฟไลน์ -->
+<div class="screen" id="offline" hidden>
+  <img src="icons/icon-192.png" alt="">
+  <h1>ไม่มีการเชื่อมต่ออินเทอร์เน็ต</h1>
+  <p>ระบบต้องใช้อินเทอร์เน็ตเพื่อออกเลขให้ไม่ซ้ำกัน กรุณาเชื่อมต่อแล้วลองอีกครั้ง</p>
+  <button class="btn" id="retry2">ลองอีกครั้ง</button>
+</div>
+
+<!-- ยังไม่ได้ตั้งค่า -->
+<div class="screen" id="nocfg" hidden>
+  <img src="icons/icon-192.png" alt="">
+  <h1>ยังไม่ได้ตั้งค่า URL ของระบบ</h1>
+  <p>แก้ไฟล์ <code>config.js</code> ใส่ URL เว็บแอปจาก Apps Script (ลงท้ายด้วย <code>/exec</code>) ที่ <code>APP_URL</code></p>
+</div>
+
+<!-- แนะนำติดตั้ง -->
+<div class="install" id="install" hidden>
+  <img src="icons/icon-192.png" alt="">
+  <div class="tx"><b>ติดตั้งเป็นแอป</b><span id="installTx">เปิดได้จากหน้าจอโฮม เต็มจอ ไม่ต้องหาลิงก์</span></div>
+  <button class="btn" id="installBtn">ติดตั้ง</button>
+  <button class="x" id="installClose" aria-label="ปิด">×</button>
+</div>
+
+<script>
+(function () {
+  const C = window.APP_CONFIG || {};
+  const $ = id => document.getElementById(id);
+  const frame = $('frame');
+  const LS = {
+    get(k) { try { return localStorage.getItem('docnum-pwa.' + k); } catch (e) { return null; } },
+    set(k, v) { try { localStorage.setItem('docnum-pwa.' + k, v); } catch (e) {} }
+  };
+  if (C.APP_NAME) { $('appName').textContent = C.APP_NAME; document.title = C.APP_NAME; }
+  $('schoolName').textContent = C.SCHOOL_NAME || '';
+
+  const validUrl = /^https:\/\/script\.google\.com\/(a\/[^/]+\/)?macros\/s\/[\w-]{20,}\/exec/.test(C.APP_URL || '');
+  let slowTimer = null;
+
+  function show(id) { ['splash', 'offline', 'nocfg'].forEach(s => { $(s).hidden = s !== id; }); }
+
+  function load() {
+    if (!validUrl) return show('nocfg');
+    if (!navigator.onLine) return show('offline');
+    show('splash'); $('slow').hidden = true;
+    frame.classList.remove('ready');
+    clearTimeout(slowTimer);
+    slowTimer = setTimeout(() => { $('slow').hidden = false; }, 15000);
+    frame.src = C.APP_URL + (C.APP_URL.indexOf('?') < 0 ? '?' : '&') + 'pwa=1&t=' + Date.now();
+  }
+  frame.addEventListener('load', () => {
+    if (!frame.src) return;
+    clearTimeout(slowTimer);
+    frame.classList.add('ready');
+    setTimeout(() => show(null), 150);
+  });
+  $('retry1').onclick = load; $('retry2').onclick = load;
+  window.addEventListener('online', () => { if (!$('offline').hidden) load(); });
+  window.addEventListener('offline', () => { if (!frame.classList.contains('ready')) show('offline'); });
+  load();
+
+  /* ---------- service worker ---------- */
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  }
+
+  /* ---------- แนะนำติดตั้ง ---------- */
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const ua = navigator.userAgent;
+  const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const isIOSSafari = isIOS && /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|Line\//i.test(ua);
+  const dismissed = Number(LS.get('installDismissed') || 0) > Date.now() - 14 * 864e5;
+  let deferred = null;
+
+  function offerInstall() {
+    if (standalone || dismissed) return;
+    setTimeout(() => { $('install').hidden = false; }, 2500);
+  }
+  window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferred = e; offerInstall(); });
+  window.addEventListener('appinstalled', () => { $('install').hidden = true; });
+  if (isIOSSafari) {
+    $('installTx').innerHTML = 'กด <svg class="share" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2f7a68" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg> แชร์ แล้วเลือก <b style="display:inline;font-size:13.5px">เพิ่มไปยังหน้าจอโฮม</b>';
+    $('installBtn').hidden = true;
+    offerInstall();
+  } else if (isIOS) {
+    $('installTx').textContent = 'เปิดลิงก์นี้ใน Safari เพื่อเพิ่มไปยังหน้าจอโฮม';
+    $('installBtn').hidden = true;
+    offerInstall();
+  }
+  $('installBtn').onclick = async () => {
+    if (!deferred) return;
+    deferred.prompt();
+    await deferred.userChoice.catch(() => {});
+    deferred = null; $('install').hidden = true;
+  };
+  $('installClose').onclick = () => { $('install').hidden = true; LS.set('installDismissed', String(Date.now())); };
+})();
+</script>
+</body>
+</html>
