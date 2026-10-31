@@ -76,6 +76,11 @@ await ok('student reads fix', getDoc(doc(stu, 'fixes', GK)));
     b.set(doc(dd, 'fixes', gk), { grade_key: gk, request_id: rid, student_id: SID, class: 'ม.4/2', original_grade: '0', new_grade: '1', approved_at: serverTimestamp() });
     b.set(...log(dd, rid, A)); }
   await ok('academic bulk approves 6 in one batch', b.commit()); }
+// เปิดคำร้องแบบกลุ่ม (query ตามเลขคำร้อง + เลขประจำตัว)
+{ const { query, where, getDocs } = await import('firebase/firestore');
+  await ok('student queries own group', getDocs(query(collection(stu, 'requests'), where('request_no', '==', 'RQ2'), where('student_id', '==', SID))));
+  await no('student queries group without own filter', getDocs(query(collection(stu, 'requests'), where('request_no', '==', 'RQ2'))));
+  await ok('measure queries group', getDocs(query(collection(staff(M), 'requests'), where('request_no', '==', 'RQ2'), where('student_id', '==', SID)))); }
 // โหมดล้างข้อมูลทดสอบ
 { const ad = staff(ADMIN);
   await no('delete request while test mode off', deleteDoc(doc(ad, 'requests', RID)));
