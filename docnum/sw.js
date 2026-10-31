@@ -1,6 +1,6 @@
 /* Service worker: เก็บเปลือกแอปไว้ในเครื่อง ให้เปิดได้เร็วและแสดงหน้าออฟไลน์ได้
  * ข้อมูลจริงมาจาก Apps Script ผ่านอินเทอร์เน็ตเสมอ (ไม่แคช) */
-const CACHE = 'docnum-shell-v2';
+const CACHE = 'docnum-shell-v3';
 const SHELL = [
   './', './index.html', './config.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-192.png',

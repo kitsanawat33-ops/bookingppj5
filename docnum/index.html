@@ -32,6 +32,7 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
 .btn{border:0;background:var(--accent);color:#fff;font:inherit;font-weight:600;font-size:15px;border-radius:12px;padding:11px 22px;cursor:pointer}
 .btn.ghost{background:#fff;color:var(--text);border:1px solid var(--border)}
 .slow{font-size:13px;color:var(--faint)}
+.credit{position:absolute;bottom:calc(20px + env(safe-area-inset-bottom));left:0;right:0;font-size:12px;color:var(--faint)}
 .slow a{color:var(--accent);cursor:pointer;text-decoration:underline}
 code{background:#fff;border:1px solid var(--border);border-radius:6px;padding:1px 6px;font-size:13px}
 
@@ -57,6 +58,7 @@ code{background:#fff;border:1px solid var(--border);border-radius:6px;padding:1p
   <h1 id="appName">ePPJ</h1>
   <p id="schoolName"></p>
   <div class="spin"></div>
+  <div class="credit">พัฒนาโดย KITSANAWAT · Pixel Math Studio</div>
   <div class="slow" id="slow" hidden>โหลดนานกว่าปกติ · <a id="retry1">ลองใหม่</a></div>
 </div>
 
