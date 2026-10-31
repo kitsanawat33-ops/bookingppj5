@@ -265,4 +265,4 @@ iframe.memo{width:100%;height:70vh;border:1px solid var(--line);border-radius:10
 .credit{text-align:center;font-size:.72rem;color:var(--muted);margin-top:14px;letter-spacing:.02em}
 .credit b{color:#2563e9;font-weight:600;letter-spacing:.06em}
 .side-credit{padding:18px 8px 6px;border-top:1px solid var(--line);margin-top:18px;line-height:1.6}
-@media(max-width:900px){ body.stu .main::after{content:'พัฒนาโดย KITSANAWAT · Pixel Math Studio';display:block;text-align:center;font-size:.7rem;color:var(--muted);margin-top:18px;letter-spacing:.04em} }
+@media(max-width:900px){ body.stu .main::after{content:'พัฒนาโดย KITSANAWAT · Pixel Math Studio ·';display:block;text-align:center;font-size:.7rem;color:var(--muted);margin-top:18px;letter-spacing:.04em} }
