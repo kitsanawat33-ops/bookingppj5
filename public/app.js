@@ -190,7 +190,7 @@ async function loadSettings() {
 async function handleUser(user) {
   stopLive();
   closeModal();
-  ['_terms', '_termSel', '_memos', 'staffList', '_svCls', '_inboxTab'].forEach(k => S[k] = null);
+  ['_terms', '_termSel', '_memos', 'staffList', '_svCls', '_inboxTab', '_sgCls', '_sgTerm'].forEach(k => S[k] = null);
   if (!user) { S.me = null; renderLogin(); return; }
   try {
     loading(true, 'กำลังเข้าสู่ระบบ...');
@@ -215,7 +215,7 @@ async function resolveMe(user) {
     const st = await F.getDoc(R.student(sid));
     const d = st.exists() ? st.data() : {};
     if (d.active === false) throw new Error('บัญชีนักเรียนถูกระงับ');
-    S.me = { type: 'student', sid, email: em, name: d.name || sid, cls: d.class || '', number: d.number || '', roles: ['student'] };
+    S.me = { type: 'student', sid, email: em, name: d.name || sid, cls: d.class || '', number: d.number || '', roles: ['student'], dflt: link.data().dflt === true };
     return;
   }
   if (!user.emailVerified) throw new Error('อีเมลนี้ยังไม่ได้รับการยืนยัน');
@@ -255,22 +255,50 @@ function renderLogin(msg) {
   show('stu');
 }
 
+// Firebase บังคับรหัสผ่าน ≥ 6 ตัว แต่เลขประจำตัวนักเรียนมี 4–5 หลัก → เติมคำนำหน้าก่อนส่งทุกครั้ง (นักเรียนไม่ต้องรู้)
+const pwX = p => 'ppj#' + String(p);
+const cidKey = cid => sha256('cid:' + cid);
+const AUTH_FAIL = ['auth/invalid-credential', 'auth/user-not-found', 'auth/wrong-password', 'auth/invalid-login-credentials'];
+function validCid(c) {
+  if (!/^\d{13}$/.test(c)) return false;
+  let s = 0; for (let i = 0; i < 12; i++) s += Number(c[i]) * (13 - i);
+  return (11 - s % 11) % 10 === Number(c[12]);
+}
+async function resolveStudentId(input) {
+  const x = String(input || '').trim().replace(/[\s-]/g, '');
+  if (/^\d{13}$/.test(x)) {
+    const d = await F.getDoc(F.doc(db, 'cid_index', await cidKey(x)));
+    if (!d.exists()) throw new Error('ไม่พบเลขประจำตัวประชาชนนี้ในระบบ กรุณาติดต่องานวัดผล');
+    return { sid: d.data().sid, cid: x };
+  }
+  return { sid: lowerSid(x), cid: null };
+}
+
 function stuLoginForm() {
   $('#login-body').innerHTML = `
     <form id="f-login">
-      <label class="f"><span>เลขประจำตัวนักเรียน</span><input class="in" name="sid" inputmode="numeric" autocomplete="username" required></label>
+      <label class="f"><span>เลขประจำตัวประชาชน 13 หลัก (หรือเลขประจำตัวนักเรียน)</span><input class="in" name="user" inputmode="numeric" autocomplete="username" required></label>
       <label class="f"><span>รหัสผ่าน</span><input class="in" type="password" name="pw" autocomplete="current-password" required></label>
       <button class="btn pri" style="width:100%;justify-content:center">เข้าสู่ระบบ</button>
     </form>
-    <div class="center" style="margin-top:12px"><a href="#" id="go-act">เข้าใช้ครั้งแรก / ได้รับรหัสเริ่มต้นใหม่</a></div>
-    <div class="center small muted" style="margin-top:6px">ลืมรหัสผ่าน ติดต่อครูที่ปรึกษาหรืองานวัดผลเพื่อขอรหัสเริ่มต้นใหม่</div>`;
+    <div class="alert info small" style="margin-top:12px"><b>เข้าใช้ครั้งแรก:</b> ชื่อผู้ใช้ = เลขประจำตัวประชาชน 13 หลัก · รหัสผ่าน = เลขประจำตัวนักเรียน<br>เข้าแล้วเปลี่ยนรหัสผ่านใหม่ได้ที่เมนู "เปลี่ยนรหัสผ่าน"</div>
+    <div class="center" style="margin-top:10px"><a href="#" id="go-act">ได้รับรหัสเริ่มต้น 6 ตัวจากครู? เปิดใช้งานที่นี่</a></div>
+    <div class="center small muted" style="margin-top:6px">ลืมรหัสผ่าน ติดต่อครูที่ปรึกษาหรืองานวัดผลเพื่อรีเซ็ต</div>`;
   $('#go-act').onclick = e => { e.preventDefault(); stuActivateForm(); };
   $('#f-login').onsubmit = async e => {
     e.preventDefault();
-    const f = e.target; const sid = lowerSid(f.sid.value);
+    const f = e.target; const pw = f.pw.value.trim();
     await quiet(run(async () => {
+      const { sid, cid } = await resolveStudentId(f.user.value);
       const v = await getVer(sid);
-      await F.signInWithEmailAndPassword(auth, studentEmail(sid, v), f.pw.value);
+      try {
+        await F.signInWithEmailAndPassword(auth, studentEmail(sid, v), pwX(pw));
+      } catch (err) {
+        if (!AUTH_FAIL.includes(err.code)) throw err;
+        if (cid && pw === sid) { await activateStudent(sid, cid, pw, true); return; }   // เข้าใช้ครั้งแรก
+        if (!cid && pw === sid) throw new Error('เข้าใช้ครั้งแรกให้ใช้เลขประจำตัวประชาชน 13 หลักเป็นชื่อผู้ใช้');
+        throw new Error('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
+      }
     }, 'กำลังเข้าสู่ระบบ...'));
   };
 }
@@ -283,7 +311,7 @@ async function getVer(sid) {
 
 function stuActivateForm() {
   $('#login-body').innerHTML = `
-    <div class="alert info small" style="margin-bottom:12px">ใช้ <b>รหัสเริ่มต้น 6 ตัว</b> ที่ได้รับจากครู แล้วตั้งรหัสผ่านของตัวเอง</div>
+    <div class="alert info small" style="margin-bottom:12px">สำหรับนักเรียนที่ได้รับ <b>รหัสเริ่มต้น 6 ตัว</b> จากครู (กรณีไม่มีเลขประจำตัวประชาชนในระบบ)</div>
     <form id="f-act">
       <label class="f"><span>เลขประจำตัวนักเรียน</span><input class="in" name="sid" inputmode="numeric" required></label>
       <label class="f"><span>รหัสเริ่มต้น</span><input class="in" name="code" style="text-transform:uppercase;letter-spacing:.15em" required></label>
@@ -297,28 +325,29 @@ function stuActivateForm() {
     e.preventDefault();
     const f = e.target;
     if (f.pw.value !== f.pw2.value) return toast('รหัสผ่านทั้งสองช่องไม่ตรงกัน', 'bad');
-    await quiet(run(() => activateStudent(lowerSid(f.sid.value), f.code.value, f.pw.value), 'กำลังเปิดใช้งาน...'));
+    await quiet(run(() => activateStudent(lowerSid(f.sid.value), f.code.value, f.pw.value, false), 'กำลังเปิดใช้งาน...'));
   };
 }
 
-async function activateStudent(sid, code, pw) {
+/** สร้างบัญชีครั้งแรก: secret = เลขประจำตัวประชาชน (หรือรหัสเริ่มต้น 6 ตัว) ใช้ยืนยันตัวตนกับค่าที่ครูนำเข้าไว้ */
+async function activateStudent(sid, secret, pw, dflt) {
   const v = await getVer(sid);
   S.activating = true;
   let cred;
   try {
-    try { cred = await F.createUserWithEmailAndPassword(auth, studentEmail(sid, v), pw); }
+    try { cred = await F.createUserWithEmailAndPassword(auth, studentEmail(sid, v), pwX(pw)); }
     catch (e) {
-      if (e.code === 'auth/email-already-in-use') throw new Error('บัญชีนี้เปิดใช้งานแล้ว ให้เข้าสู่ระบบด้วยรหัสผ่านที่ตั้งไว้ หากลืมรหัสผ่านให้ติดต่อครูเพื่อขอรหัสเริ่มต้นใหม่');
+      if (e.code === 'auth/email-already-in-use') throw new Error(dflt ? 'รหัสผ่านไม่ถูกต้อง (บัญชีนี้เปลี่ยนรหัสผ่านแล้ว) หากลืมรหัสผ่านให้ติดต่อครูเพื่อรีเซ็ต' : 'บัญชีนี้เปิดใช้งานแล้ว ให้เข้าสู่ระบบด้วยรหัสผ่านที่ตั้งไว้');
       throw e;
     }
     try {
-      await F.setDoc(R.link(sid), { uid: cred.user.uid, h: await codeHash(sid, code), at: F.serverTimestamp() });
+      await F.setDoc(R.link(sid), { uid: cred.user.uid, h: await codeHash(sid, secret), at: F.serverTimestamp(), dflt: !!dflt });
     } catch (e) {
       await quiet(F.deleteUser(cred.user));
-      throw new Error('รหัสเริ่มต้นไม่ถูกต้อง');
+      throw new Error(dflt ? 'ข้อมูลไม่ตรงกับทะเบียนนักเรียน กรุณาติดต่องานวัดผล' : 'รหัสเริ่มต้นไม่ถูกต้อง');
     }
   } finally { S.activating = false; }
-  toast('เปิดใช้งานบัญชีเรียบร้อย', 'ok');
+  toast('ยินดีต้อนรับ เข้าสู่ระบบครั้งแรกเรียบร้อย', 'ok');
   await handleUser(auth.currentUser);
 }
 
@@ -385,6 +414,7 @@ const NAV = [
   { id: 'memos', label: 'บันทึกข้อความ', ico: '📄', roles: ['academic', 'director', 'measure', 'admin'], cnt: 'memos' },
   { id: 'director', label: 'รอ ผอ. อนุมัติ', ico: '✍️', roles: ['director'], cnt: 'director' },
   { id: 'all', label: 'ติดตามคำร้องทั้งหมด', ico: '🔎', roles: ['measure', 'academic', 'director', 'admin'] },
+  { id: 'sgrades', label: 'ผลการเรียนนักเรียน', ico: '📋', staff: true },
   { id: 'signature', label: 'ลายเซ็นของฉัน', ico: '🖊️', staff: true },
   { sec: 'จัดการข้อมูล', roles: ['admin', 'measure'] },
   { id: 'import', label: 'นำเข้าผลการเรียน', ico: '⬆️', roles: ['admin', 'measure'] },
@@ -414,11 +444,13 @@ function renderShell() {
           <button class="btn sm" id="logout">ออก</button>
         </div>
       </div>
+      ${isStudent() && S.me.dflt ? `<div class="alert warn small" style="margin-bottom:14px">🔑 คุณยังใช้รหัสผ่านเริ่มต้น (เลขประจำตัวนักเรียน) แนะนำให้ <a href="#" id="go-spw"><b>เปลี่ยนรหัสผ่าน</b></a> เพื่อป้องกันคนอื่นเข้าใช้แทน</div>` : ''}
       <div id="view"></div>
     </main>
   </div>`;
   $('#logout').onclick = async () => { if (await confirmDlg('ออกจากระบบ', 'ต้องการออกจากระบบใช่ไหม', 'ออกจากระบบ')) { location.hash = ''; F.signOut(auth); } };
   $('#menu-btn').onclick = () => $('#side').classList.toggle('open');
+  const gs = $('#go-spw'); if (gs) gs.onclick = e => { e.preventDefault(); go('spw'); };
   renderNav();
   renderView();
 }
@@ -510,7 +542,8 @@ VIEWS.grades = async (live) => {
     <div class="card">
       <div class="row" style="justify-content:space-between;margin-bottom:10px">
         <div class="tabs" style="margin:0">${terms.map(x => `<button class="tab ${x.id === sel ? 'on' : ''}" data-t="${esc(x.id)}">ภาคเรียนที่ ${esc(x.semester)}/${esc(x.academic_year)}</button>`).join('')}</div>
-        <div class="small muted">เกรดเฉลี่ย (เฉพาะรายวิชาที่มีผลเป็นตัวเลข) <b style="font-size:1.1rem;color:var(--ink)">${gpa}</b></div>
+        <div class="row small muted">เกรดเฉลี่ย (เฉพาะรายวิชาที่มีผลเป็นตัวเลข) <b style="font-size:1.1rem;color:var(--ink)">${gpa}</b>
+          <button class="btn sm" id="g-print">🖨️ พิมพ์ผลการเรียน</button></div>
       </div>
       <div class="small muted" style="margin-bottom:8px">${esc(S.me.name)} · เลขประจำตัว ${esc(S.me.sid)} · ชั้น ${esc(t.class || S.me.cls)}</div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>รหัสวิชา</th><th>รายวิชา</th><th>หน่วยกิต</th><th>ผลการเรียน</th><th>สถานะ/การดำเนินการ</th></tr></thead><tbody>
@@ -525,6 +558,11 @@ VIEWS.grades = async (live) => {
       </tr>`).join('')}</tbody></table></div>
     </div>`;
   $$('[data-t]', v).forEach(b => b.onclick = () => { S._termSel = b.dataset.t; VIEWS.grades(true); });
+  $('#g-print', v).onclick = () => {
+    const fx = {};
+    mine.filter(r => r.status === 'COMPLETED').forEach(r => fx[r.grade_key] = { original_grade: r.original_grade, new_grade: r.new_grade, memo_no: r.memo_no });
+    printReports([{ term: { ...t, name: t.name || S.me.name }, fixes: fx }], 'ผลการเรียน ' + S.me.sid);
+  };
   $$('[data-open]', v).forEach(a => a.onclick = e => { e.preventDefault(); openRequest(a.dataset.open); });
   $$('[data-req]', v).forEach(b => b.onclick = () => newRequestDlg(rows.find(r => r.code === b.dataset.req)));
 };
@@ -580,19 +618,25 @@ VIEWS.myreq = () => {
 };
 
 VIEWS.spw = () => {
-  $('#view').innerHTML = `<div class="card" style="max-width:440px"><form id="f-pw">
-    <label class="f"><span>รหัสผ่านเดิม</span><input class="in" type="password" name="old" required></label>
+  $('#view').innerHTML = `<div class="card" style="max-width:460px">
+    ${S.me.dflt ? '<div class="alert warn small" style="margin-bottom:12px">ตอนนี้ใช้รหัสผ่านเริ่มต้น (เลขประจำตัวนักเรียน) ซึ่งเพื่อนอาจเดาได้ แนะนำให้ตั้งรหัสผ่านใหม่</div>' : ''}
+    <form id="f-pw">
+    <label class="f"><span>รหัสผ่านเดิม${S.me.dflt ? ' (เลขประจำตัวนักเรียน)' : ''}</span><input class="in" type="password" name="old" required></label>
     <label class="f"><span>รหัสผ่านใหม่ (อย่างน้อย 6 ตัว)</span><input class="in" type="password" name="n1" minlength="6" required></label>
     <label class="f"><span>ยืนยันรหัสผ่านใหม่</span><input class="in" type="password" name="n2" minlength="6" required></label>
     <button class="btn pri">บันทึกรหัสผ่านใหม่</button></form></div>`;
   $('#f-pw').onsubmit = e => {
     e.preventDefault(); const f = e.target;
     if (f.n1.value !== f.n2.value) return toast('รหัสผ่านใหม่ไม่ตรงกัน', 'bad');
+    if (f.n1.value.length < 6) return toast('รหัสผ่านใหม่ต้องมีอย่างน้อย 6 ตัว', 'bad');
+    if (f.n1.value === S.me.sid) return toast('ห้ามใช้เลขประจำตัวนักเรียนเป็นรหัสผ่านใหม่', 'bad');
     quiet(run(async () => {
       const u = auth.currentUser;
-      await F.reauthenticateWithCredential(u, F.EmailAuthProvider.credential(u.email, f.old.value));
-      await F.updatePassword(u, f.n1.value);
-      f.reset(); toast('เปลี่ยนรหัสผ่านเรียบร้อย', 'ok');
+      try { await F.reauthenticateWithCredential(u, F.EmailAuthProvider.credential(u.email, pwX(f.old.value))); }
+      catch (err) { throw new Error('รหัสผ่านเดิมไม่ถูกต้อง'); }
+      await F.updatePassword(u, pwX(f.n1.value));
+      if (S.me.dflt) { await F.updateDoc(R.link(S.me.sid), { dflt: false }); S.me.dflt = false; }
+      f.reset(); toast('เปลี่ยนรหัสผ่านเรียบร้อย', 'ok'); renderShell();
     }));
   };
 };
@@ -1045,7 +1089,9 @@ async function createMemo(ids, manualNo, date, subject) {
     tx.set(memoRef, {
       memo_no: no, memo_date: date, subject: subject || ('ขออนุมัติแก้ไขผลการเรียน ' + terms.join(', ')), to: S.settings.memo_to,
       terms, request_ids: ids, created_by: S.me.email, created_by_name: S.me.name, status: 'PENDING', decision: '',
-      director_comment: '', signs, created_at: F.serverTimestamp()
+      director_comment: '', signs, created_at: F.serverTimestamp(),
+      items: Object.fromEntries(rs.map(r => [r.id, { grade_key: r.grade_key, new_grade: r.new_grade, original_grade: r.original_grade,
+        student_id: r.student_id, class: r.class, subject_code: r.subject_code, academic_year: r.academic_year, semester: r.semester }]))
     });
     rs.forEach(r => {
       tx.update(R.req(r.id), { status: 'IN_MEMO', memo_id: memoRef.id, memo_no: no, updated_at: F.serverTimestamp() });
@@ -1101,6 +1147,11 @@ async function decideMemo(m, rs, d, c) {
     const p = { status: reqSt, director_comment: c, updated_at: F.serverTimestamp() };
     if (d === 'return') { p.memo_id = ''; p.memo_no = ''; }
     b.update(R.req(r.id), p);
+    if (d === 'approve') b.set(F.doc(db, 'fixes', r.grade_key), {   // ผลการเรียนที่แก้แล้ว (ใช้แสดง/พิมพ์)
+      grade_key: r.grade_key, request_id: r.id, memo_id: m.id, memo_no: m.memo_no, student_id: r.student_id, class: r.class,
+      academic_year: r.academic_year, semester: r.semester, subject_code: r.subject_code, subject_name: r.subject_name,
+      original_grade: r.original_grade, new_grade: r.new_grade, approved_at: F.serverTimestamp()
+    });
     b.set(logRef(r.id), logData(d === 'approve' ? 'ผอ. อนุมัติและลงนาม' : (d === 'reject' ? 'ผอ. ไม่อนุมัติ' : 'ผอ. ส่งบันทึกกลับแก้ไข'),
       (d === 'approve' ? 'ปรับผลการเรียน ' + r.original_grade + ' → ' + r.new_grade + ' (บันทึกที่ ' + m.memo_no + ')' : c), 'ผู้อำนวยการ'));
   });
@@ -1158,6 +1209,126 @@ ${rs.map((r, i) => { const x = r.signs || {}; return `<tr><td class="c">${i + 1}
 <div class="small" style="margin-top:.3cm;color:#555">เลขคำร้อง: ${esc(rs.map(r => r.request_no).join(', '))}</div>
 </div></body></html>`;
 }
+
+/* ---------------- ผลการเรียนนักเรียน (ดู/พิมพ์) ---------------- */
+// คำนวณรายวิชาหลังรวมผลที่ ผอ. อนุมัติแก้ไขแล้ว
+function termRowsFixed(t, fixes) {
+  return Object.keys(t.subjects || {}).sort().map(code => {
+    const sub = t.subjects[code];
+    const gk = t.academic_year + '_' + t.semester + '_' + t.student_id + '_' + code;
+    const fx = fixes[gk];
+    return { code, name: sub.name || '', credit: sub.credit || '', grade: fx ? fx.new_grade : sub.grade, fixed: fx || null, teacher: sub.teacher_name || '' };
+  });
+}
+function gpaOf(rows) {
+  let c = 0, p = 0;
+  rows.forEach(r => { const cr = parseFloat(r.credit); if (/^[0-4](\.5)?$/.test(r.grade) && cr > 0) { c += cr; p += cr * parseFloat(r.grade); } });
+  return { credits: c, gpa: c ? (Math.floor(p / c * 100) / 100).toFixed(2) : '-' };
+}
+function reportHtml(items) {
+  const s = S.settings;
+  const today = thaiDateFull(isoToday());
+  const page = ({ term: t, fixes }) => {
+    const rows = termRowsFixed(t, fixes);
+    const g = gpaOf(rows); const fails = rows.filter(r => failSet().includes(r.grade)).length;
+    return `<section class="pg">
+      <div class="hd"><div class="t1">แบบรายงานผลการเรียนรายบุคคล</div><div>${esc(s.school_name)}</div>
+      <div>ปีการศึกษา ${esc(t.academic_year)} ภาคเรียนที่ ${esc(t.semester)}</div></div>
+      <div class="info"><span>เลขประจำตัว <b>${esc(t.student_id)}</b></span><span>ชื่อ–สกุล <b>${esc(t.name || '')}</b></span><span>ชั้น <b>${esc(t.class || '')}</b></span></div>
+      <table><thead><tr><th style="width:7%">ที่</th><th style="width:14%">รหัสวิชา</th><th>รายวิชา</th><th style="width:10%">หน่วยกิต</th><th style="width:12%">ผลการเรียน</th><th style="width:26%">หมายเหตุ</th></tr></thead><tbody>
+      ${rows.map((r, i) => `<tr><td class="c">${i + 1}</td><td class="c">${esc(r.code)}</td><td>${esc(r.name)}</td><td class="c">${esc(r.credit)}</td>
+        <td class="c"><b>${esc(r.grade || '')}</b></td><td class="sm">${r.fixed ? `แก้ไขจาก ${esc(r.fixed.original_grade)} ตามบันทึกที่ ${esc(r.fixed.memo_no || '')}` : (failSet().includes(r.grade) ? 'ต้องดำเนินการแก้ไข' : '')}</td></tr>`).join('')}
+      </tbody></table>
+      <div class="sum"><span>หน่วยกิตที่คิดเกรดเฉลี่ย <b>${g.credits}</b></span><span>เกรดเฉลี่ย (GPA) <b>${g.gpa}</b></span><span>รายวิชาที่ยังติด 0/ร/มส/มผ <b>${fails}</b></span></div>
+      <div class="signs">
+        <div><div class="ln">ลงชื่อ ...........................................</div><div>(...........................................)</div><div>ครูประจำชั้น / ครูที่ปรึกษา</div></div>
+        <div><div class="ln">ลงชื่อ ...........................................</div><div>(...........................................)</div><div>นายทะเบียน / งานวัดผล</div></div>
+        <div><div class="ln">ลงชื่อ ...........................................</div><div>(${esc(s.director_name || '...........................................')})</div><div>${esc(s.director_position || 'ผู้อำนวยการโรงเรียน')}</div></div>
+      </div>
+      <div class="ft">พิมพ์จากระบบยื่นคำร้องแก้ไขผลการเรียน เมื่อ ${esc(today)}</div></section>`;
+  };
+  return `<!DOCTYPE html><html lang="th"><head><meta charset="utf-8"><title>ผลการเรียน</title>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
+<style>@page{size:A4;margin:1.6cm 1.6cm 1.4cm 2cm}body{font-family:"TH Sarabun New","Sarabun",sans-serif;font-size:15pt;color:#000;margin:0;padding:10px}
+@media print{body{padding:0}}.pg{max-width:17cm;margin:0 auto 1cm;page-break-after:always}.pg:last-child{page-break-after:auto}
+.hd{text-align:center;line-height:1.3;margin-bottom:.3cm}.t1{font-size:19pt;font-weight:700}.info{display:flex;gap:.8cm;flex-wrap:wrap;margin:.2cm 0}
+table{width:100%;border-collapse:collapse;font-size:13.5pt}th,td{border:1px solid #000;padding:1px 5px;vertical-align:top}th{background:#eee}.c{text-align:center}.sm{font-size:11.5pt}
+.sum{display:flex;gap:.8cm;flex-wrap:wrap;margin:.25cm 0 .2cm}.signs{display:flex;justify-content:space-between;gap:.4cm;margin-top:.9cm;text-align:center;font-size:13pt}
+.signs>div{flex:1}.ln{margin-bottom:.1cm}.ft{margin-top:.6cm;font-size:10.5pt;color:#555;text-align:right}</style></head>
+<body>${items.map(page).join('')}</body></html>`;
+}
+function printReports(items, title) {
+  if (!items.length) return toast('ไม่มีข้อมูลสำหรับพิมพ์', 'bad');
+  const bg = document.createElement('div');
+  bg.className = 'modal-bg'; bg.style.zIndex = 150;
+  bg.innerHTML = `<div class="modal lg"><div class="modal-h"><h3>${esc(title)} (${items.length} หน้า)</h3><button class="x">×</button></div>
+    <div class="modal-b"><iframe class="memo"></iframe></div>
+    <div class="modal-f"><button class="btn pri" data-p>🖨️ พิมพ์ / บันทึก PDF</button><button class="btn" data-c>ปิด</button></div></div>`;
+  document.body.appendChild(bg);
+  const fr = $('iframe', bg); fr.srcdoc = reportHtml(items);
+  const close = () => bg.remove();
+  $('.x', bg).onclick = close; $('[data-c]', bg).onclick = close;
+  $('[data-p]', bg).onclick = () => fr.contentWindow.print();
+}
+
+VIEWS.sgrades = async () => {
+  const v = $('#view');
+  const meta = await F.getDoc(R.meta());
+  const classes = (meta.exists() ? meta.data().classes || [] : []).slice().sort((a, b) => a.localeCompare(b, 'th', { numeric: true }));
+  v.innerHTML = `<div class="card"><div class="row">
+      <label class="f"><span>ชั้น/ห้อง</span><select class="in" id="sg-cls"><option value="">-- เลือก --</option>${classes.map(c => `<option ${c === S._sgCls ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
+      <label class="f"><span>หรือเลขประจำตัวนักเรียน</span><input class="in" id="sg-sid" placeholder="เช่น 4116"></label>
+      <button class="btn" id="sg-find" style="margin-top:12px">ค้นหา</button></div>
+    <div id="sg-out" class="muted small">เลือกชั้นหรือค้นหาเลขประจำตัว</div></div>`;
+  const loadFix = async (field, val) => { const fx = {}; snapList(await F.getDocs(F.query(R.col('fixes'), F.where(field, '==', val)))).forEach(f => fx[f.grade_key] = f); return fx; };
+  const termKey = t => t.academic_year + '/' + t.semester;
+  const drawClass = (terms, fixes, cls) => {
+    const keys = [...new Set(terms.map(termKey))].sort().reverse();
+    const sel = S._sgTerm && keys.includes(S._sgTerm) ? S._sgTerm : keys[0];
+    S._sgTerm = sel;
+    const list = terms.filter(t => termKey(t) === sel).map(t => {
+      const rows = termRowsFixed(t, fixes); return { t, rows, g: gpaOf(rows), fail: rows.filter(r => failSet().includes(r.grade)).length, fixed: rows.filter(r => r.fixed).length };
+    }).sort((a, b) => (Number(a.t.number) || 0) - (Number(b.t.number) || 0) || a.t.student_id.localeCompare(b.t.student_id));
+    $('#sg-out').innerHTML = !keys.length ? '<div class="empty">ไม่มีข้อมูลผลการเรียน</div>' : `
+      <div class="row" style="margin:10px 0"><div class="tabs" style="margin:0">${keys.map(k => `<button class="tab ${k === sel ? 'on' : ''}" data-k="${esc(k)}">ภาคเรียนที่ ${esc(k.split('/')[1])}/${esc(k.split('/')[0])}</button>`).join('')}</div>
+        <span class="grow"></span><button class="btn pri" id="sg-print-all">🖨️ พิมพ์ทั้งห้อง (${list.length} คน)</button></div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>เลขประจำตัว</th><th>ชื่อ–สกุล</th><th>ชั้น</th><th>GPA</th><th>ยังติด</th><th>แก้ไขแล้ว</th><th></th></tr></thead><tbody>
+      ${list.map(x => `<tr class="${x.fail ? 'fail' : ''}"><td>${esc(x.t.student_id)}</td><td>${esc(x.t.name || '')}</td><td>${esc(x.t.class || '')}</td><td><b>${x.g.gpa}</b></td>
+        <td>${x.fail ? `<span class="badge b-red">${x.fail}</span>` : '-'}</td><td>${x.fixed ? `<span class="badge b-green">${x.fixed}</span>` : '-'}</td>
+        <td class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn sm" data-view="${esc(x.t.id)}">ดู</button><button class="btn sm" data-pr="${esc(x.t.id)}">พิมพ์</button></td></tr>`).join('')}</tbody></table></div>`;
+    $$('[data-k]').forEach(b => b.onclick = () => { S._sgTerm = b.dataset.k; drawClass(terms, fixes, cls); });
+    const ap = $('#sg-print-all'); if (ap) ap.onclick = () => printReports(list.map(x => ({ term: x.t, fixes })), 'ผลการเรียน ' + (cls || ''));
+    $$('[data-pr]').forEach(b => b.onclick = () => printReports([{ term: terms.find(t => t.id === b.dataset.pr), fixes }], 'ผลการเรียน ' + b.dataset.pr.split('_')[0]));
+    $$('[data-view]').forEach(b => b.onclick = () => { const t = terms.find(x => x.id === b.dataset.view); studentDetail(terms.filter(x => x.student_id === t.student_id), fixes); });
+  };
+  const studentDetail = (terms, fixes) => {
+    terms = terms.slice().sort((a, b) => termKey(b).localeCompare(termKey(a)));
+    const t0 = terms[0];
+    const m = modal(`<div class="modal-h"><h3>${esc(t0.name || '')} (${esc(t0.student_id)}) ชั้น ${esc(t0.class || '')}</h3><button class="x" data-close>×</button></div>
+      <div class="modal-b">${terms.map(t => { const rows = termRowsFixed(t, fixes); const g = gpaOf(rows); return `
+        <div class="row" style="margin:6px 0"><h4 style="margin:0">ภาคเรียนที่ ${esc(t.semester)}/${esc(t.academic_year)}</h4><span class="muted small">GPA ${g.gpa}</span><span class="grow"></span><button class="btn sm" data-pt="${esc(t.id)}">🖨️ พิมพ์ภาคเรียนนี้</button></div>
+        <div class="tbl-wrap" style="margin-bottom:14px"><table class="tbl"><thead><tr><th>รหัสวิชา</th><th>รายวิชา</th><th>หน่วยกิต</th><th>ผลการเรียน</th></tr></thead><tbody>
+        ${rows.map(r => `<tr class="${failSet().includes(r.grade) ? 'fail' : ''}"><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${esc(r.credit)}</td>
+          <td>${r.fixed ? `${gradeChip(r.fixed.original_grade, 'fail')} → ${gradeChip(r.grade, 'fixed')} <span class="small muted">บันทึกที่ ${esc(r.fixed.memo_no || '')}</span>` : gradeChip(r.grade, failSet().includes(r.grade) ? 'fail' : '')}</td></tr>`).join('')}
+        </tbody></table></div>`; }).join('')}</div>
+      <div class="modal-f"><button class="btn pri" id="sd-all">🖨️ พิมพ์ทุกภาคเรียน</button><button class="btn" data-close>ปิด</button></div>`, { lg: true });
+    $$('[data-pt]', m).forEach(b => b.onclick = () => printReports([{ term: terms.find(x => x.id === b.dataset.pt), fixes }], 'ผลการเรียน ' + t0.student_id));
+    $('#sd-all', m).onclick = () => printReports(terms.map(t => ({ term: t, fixes })), 'ผลการเรียน ' + t0.student_id);
+  };
+  const loadCls = cls => quiet(run(async () => {
+    S._sgCls = cls;
+    const [terms, fixes] = await Promise.all([F.getDocs(F.query(R.col('terms'), F.where('class', '==', cls))).then(snapList), loadFix('class', cls)]);
+    drawClass(terms, fixes, cls);
+  }, 'กำลังโหลด...'));
+  $('#sg-cls').onchange = e => e.target.value && loadCls(e.target.value);
+  $('#sg-find').onclick = () => quiet(run(async () => {
+    const sid = lowerSid($('#sg-sid').value); if (!sid) return;
+    const [terms, fixes] = await Promise.all([F.getDocs(F.query(R.col('terms'), F.where('student_id', '==', sid))).then(snapList), loadFix('student_id', sid)]);
+    if (!terms.length) throw new Error('ไม่พบผลการเรียนของเลขประจำตัวนี้');
+    studentDetail(terms, fixes);
+  }));
+  if (S._sgCls) loadCls(S._sgCls);
+};
 
 /* ---------------- ติดตามทั้งหมด ---------------- */
 VIEWS.all = async () => {
@@ -1432,22 +1603,27 @@ VIEWS.students = async () => {
   const v = $('#view');
   const meta = await F.getDoc(R.meta());
   const classes = (meta.exists() ? meta.data().classes || [] : []).slice().sort((a, b) => a.localeCompare(b, 'th', { numeric: true }));
-  v.innerHTML = `<div class="card"><div class="row">
+  v.innerHTML = `<div class="card" style="border-color:#c7d2fe"><h3>นำเข้าเลขประจำตัวประชาชน (สำหรับเข้าสู่ระบบครั้งแรก)</h3>
+      <p class="small muted" style="margin-top:0">เลือกไฟล์ Excel รายชื่อนักเรียนที่มีคอลัมน์ <b>เลข ปปช.</b> และ <b>เลขประจำตัว</b> (อ่านทุกชีต) — ระบบ<b>ไม่เก็บเลขประจำตัวประชาชน</b> เก็บเฉพาะค่าที่เข้ารหัสแล้ว (hash) สำหรับตรวจสอบตอนเข้าสู่ระบบ<br>
+      นักเรียนเข้าครั้งแรก: ชื่อผู้ใช้ = เลขประจำตัวประชาชน · รหัสผ่าน = เลขประจำตัวนักเรียน</p>
+      <input type="file" class="in" id="cid-file" accept=".xlsx,.xls,.csv"><div id="cid-res"></div></div>
+    <div class="card"><div class="row">
     <label class="f"><span>ชั้น/ห้อง</span><select class="in" id="sv-cls"><option value="">-- เลือก --</option>${classes.map(c => `<option ${c === S._svCls ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
     <label class="f"><span>หรือค้นหาเลขประจำตัว</span><input class="in" id="sv-sid" placeholder="เลขประจำตัว"></label>
     <button class="btn" id="sv-find" style="margin-top:12px">ค้นหา</button></div><div id="sv-list" class="muted small">เลือกชั้นเพื่อแสดงรายชื่อ</div></div>`;
   const show = async (list) => {
     const info = await Promise.all(list.map(async s => {
       const [sec, ln] = await Promise.all([F.getDoc(R.secret(s.id)), F.getDoc(R.link(s.id))]);
-      return { ...s, code: sec.exists() ? sec.data().code : '', v: sec.exists() ? sec.data().v || 0 : 0, active_acc: ln.exists() };
+      const sd = sec.exists() ? sec.data() : {};
+      return { ...s, code: sd.code || '', mode: sd.mode || 'code', h: sd.h || '', v: sd.v || 0, active_acc: ln.exists(), dflt: ln.exists() && ln.data().dflt === true };
     }));
     info.sort((a, b) => (Number(a.number) || 0) - (Number(b.number) || 0) || a.id.localeCompare(b.id));
     $('#sv-list').innerHTML = `<div class="row" style="margin:8px 0"><span class="small muted grow">${info.length} คน · เปิดใช้งานแล้ว ${info.filter(x => x.active_acc).length}</span>
       <button class="btn sm" id="sv-print">พิมพ์ใบรหัส (ที่ยังไม่เปิดใช้งาน)</button></div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>เลขที่</th><th>เลขประจำตัว</th><th>ชื่อ–สกุล</th><th>ชั้น</th><th>บัญชี</th><th>รหัสเริ่มต้น</th><th></th></tr></thead><tbody>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>เลขที่</th><th>เลขประจำตัว</th><th>ชื่อ–สกุล</th><th>ชั้น</th><th>บัญชี</th><th>เข้าครั้งแรกด้วย</th><th></th></tr></thead><tbody>
       ${info.map(s => `<tr><td>${esc(s.number)}</td><td>${esc(s.id)}</td><td>${esc(s.name)}</td><td>${esc(s.class)}</td>
-        <td>${s.active_acc ? '<span class="badge b-green">เปิดใช้งานแล้ว</span>' : '<span class="badge b-gray">ยังไม่เปิด</span>'}</td>
-        <td><code>${s.active_acc ? '—' : esc(s.code)}</code></td><td class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn sm" data-ename="${esc(s.id)}">แก้ชื่อ</button><button class="btn sm warn" data-reset="${esc(s.id)}">รีเซ็ตรหัส</button></td></tr>`).join('')}</tbody></table></div>`;
+        <td>${s.active_acc ? (s.dflt ? '<span class="badge b-amber">ใช้รหัสเริ่มต้นอยู่</span>' : '<span class="badge b-green">เปิดใช้งานแล้ว</span>') : '<span class="badge b-gray">ยังไม่เปิด</span>'}</td>
+        <td class="small">${s.mode === 'cid' ? 'เลข ปชช. + เลขประจำตัว' : (s.active_acc ? '—' : `รหัสเริ่มต้น <code>${esc(s.code)}</code>`)}</td><td class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn sm" data-ename="${esc(s.id)}">แก้ชื่อ</button><button class="btn sm warn" data-reset="${esc(s.id)}">รีเซ็ตรหัส</button></td></tr>`).join('')}</tbody></table></div>`;
     $$('[data-ename]').forEach(b => b.onclick = () => {
       const s = info.find(x => x.id === b.dataset.ename);
       const m = modal(`<div class="modal-h"><h3>แก้ไขชื่อนักเรียน ${esc(s.id)}</h3><button class="x" data-close>×</button></div>
@@ -1460,18 +1636,21 @@ VIEWS.students = async () => {
         closeModal(); toast('บันทึกแล้ว', 'ok'); const cls = $('#sv-cls').value; if (cls) loadCls(cls); else show([{ ...s, name: nm }]);
       }));
     });
-    $('#sv-print').onclick = () => printCodes(info.filter(x => !x.active_acc && x.code).map(x => [x.id, x.name, x.class, x.code]));
+    $('#sv-print').onclick = () => printCodes(info.filter(x => !x.active_acc && x.code && x.mode !== 'cid').map(x => [x.id, x.name, x.class, x.code]));
     $$('[data-reset]').forEach(b => b.onclick = async () => {
       const s = info.find(x => x.id === b.dataset.reset);
-      if (!await confirmDlg('รีเซ็ตรหัสผ่านนักเรียน', `ออกรหัสเริ่มต้นใหม่ให้ <b>${esc(s.name)}</b> (${esc(s.id)})<br><span class="small muted">รหัสผ่านเดิมจะใช้ไม่ได้ นักเรียนต้อง "เข้าใช้ครั้งแรก" ใหม่ด้วยรหัสเริ่มต้นนี้</span>`, 'รีเซ็ต', 'bad')) return;
+      const cidMode = s.mode === 'cid' && s.h;
+      if (!await confirmDlg('รีเซ็ตรหัสผ่านนักเรียน', `รีเซ็ตบัญชีของ <b>${esc(s.name)}</b> (${esc(s.id)})<br><span class="small muted">รหัสผ่านเดิมจะใช้ไม่ได้ ${cidMode ? 'นักเรียนเข้าใหม่ด้วย เลขประจำตัวประชาชน + รหัสผ่าน = เลขประจำตัวนักเรียน' : 'ระบบจะออกรหัสเริ่มต้นใหม่ให้'}</span>`, 'รีเซ็ต', 'bad')) return;
       quiet(run(async () => {
-        const code = genCode(); const nv = s.v + 1;
+        const nv = s.v + 1; const code = cidMode ? '' : genCode();
         const bt = F.writeBatch(db);
-        bt.set(R.secret(s.id), { h: await codeHash(s.id, code), code, v: nv });
+        bt.set(R.secret(s.id), cidMode ? { h: s.h, mode: 'cid', v: nv } : { h: await codeHash(s.id, code), code, v: nv });
         bt.set(R.ver(s.id), { v: nv });
         bt.delete(R.link(s.id));
         await bt.commit();
-        await confirmDlg('รหัสเริ่มต้นใหม่', `<div class="center">${esc(s.name)}<br>เลขประจำตัว <b>${esc(s.id)}</b><div style="font-size:2rem;letter-spacing:.2em;font-weight:700;margin:10px">${code}</div></div>`, 'ตกลง');
+        await confirmDlg('รีเซ็ตเรียบร้อย', cidMode
+          ? `<div class="center">${esc(s.name)}<br>เข้าสู่ระบบใหม่ด้วย<br>ชื่อผู้ใช้: <b>เลขประจำตัวประชาชน</b><br>รหัสผ่าน: <b>${esc(s.id)}</b></div>`
+          : `<div class="center">${esc(s.name)}<br>เลขประจำตัว <b>${esc(s.id)}</b><div style="font-size:2rem;letter-spacing:.2em;font-weight:700;margin:10px">${code}</div></div>`, 'ตกลง');
         const cls = $('#sv-cls').value; if (cls) loadCls(cls);
       }));
     });
@@ -1479,8 +1658,65 @@ VIEWS.students = async () => {
   const loadCls = cls => quiet(run(async () => { S._svCls = cls; await show(snapList(await F.getDocs(F.query(R.col('students'), F.where('class', '==', cls))))); }));
   $('#sv-cls').onchange = e => e.target.value && loadCls(e.target.value);
   $('#sv-find').onclick = () => quiet(run(async () => { const sid = lowerSid($('#sv-sid').value); if (!sid) return; const s = await F.getDoc(R.student(sid)); if (!s.exists()) throw new Error('ไม่พบนักเรียน'); await show([{ id: s.id, ...s.data() }]); }));
+  $('#cid-file').onchange = e => { const f = e.target.files[0]; if (f) quiet(run(() => importCid(f), 'กำลังอ่านไฟล์...')); };
   if (S._svCls) loadCls(S._svCls);
 };
+
+/** อ่าน Excel รายชื่อ (ทุกชีต) → เก็บ hash(เลขประจำตัว|เลขประชาชน) + ดัชนี hash(เลขประชาชน) → เลขประจำตัว (ไม่เก็บเลขจริง) */
+async function importCid(file) {
+  await loadXLSX();
+  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+  const found = {}; let noCid = 0, badCid = 0;
+  wb.SheetNames.forEach(sn => {
+    const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: '', raw: true });
+    const hr = aoa.slice(0, 12).findIndex(r => r.some(c => /เลข\s*(ปปช|ปชช|ประจำตัวประชาชน|บัตรประชาชน)/.test(String(c))));
+    if (hr < 0) return;
+    const h = aoa[hr].map(c => String(c).trim());
+    const cC = h.findIndex(c => /เลข\s*(ปปช|ปชช|ประจำตัวประชาชน|บัตรประชาชน)/.test(c));
+    const sC = h.findIndex((c, i) => i !== cC && /^(เลขประจำตัว|เลขประจำตัวนักเรียน|รหัสนักเรียน)$/.test(c.replace(/\s+/g, '')));
+    if (sC < 0) return;
+    const pC = h.findIndex(c => /คำนำหน้า/.test(c)), nC = h.findIndex(c => /^ชื่อ$/.test(c)), lC = h.findIndex(c => /สกุล/.test(c));
+    aoa.slice(hr + 1).forEach(r => {
+      const sid = String(r[sC] == null ? '' : r[sC]).trim();
+      if (!/^\d+$/.test(sid)) return;
+      const raw = r[cC];
+      const cid = (typeof raw === 'number' ? String(Math.round(raw)) : String(raw || '')).replace(/\D/g, '');
+      if (!cid) { if (!found[sid]) noCid++; return; }
+      if (!validCid(cid)) { badCid++; return; }
+      const name = [pC >= 0 ? r[pC] : '', nC >= 0 ? r[nC] : '', lC >= 0 ? r[lC] : ''].map(x => String(x || '').trim()).filter(Boolean);
+      found[sid] = { cid, name: name.length > 1 ? name[0] + name[1] + (name[2] ? ' ' + name[2] : '') : name.join(' ') };
+    });
+  });
+  // เลขประชาชนเดียวกันแต่เลขประจำตัวต่างกัน = ข้อมูลผิด → ไม่ผูก ใช้รหัสเริ่มต้นแทน
+  const byCid = {}; Object.keys(found).forEach(sid => (byCid[found[sid].cid] = byCid[found[sid].cid] || []).push(sid));
+  const dupGroups = Object.values(byCid).filter(a => a.length > 1);
+  dupGroups.flat().forEach(sid => delete found[sid]);
+  const sids = Object.keys(found);
+  if (!sids.length) throw new Error('ไม่พบคอลัมน์ "เลข ปปช." และ "เลขประจำตัว" ในไฟล์');
+  const dupMsg = dupGroups.length ? `<br>⚠️ เลขประจำตัวประชาชนซ้ำกันระหว่างนักเรียนต่างเลขประจำตัว ${dupGroups.length} กรณี: <b>${dupGroups.map(g => g.join(' กับ ')).join(' · ')}</b> — ไม่ผูกเลขประชาชนให้ (ใช้รหัสเริ่มต้น 6 ตัวแทน) กรุณาตรวจใน SchoolMIS` : '';
+  if (!await confirmDlg('นำเข้าเลขประจำตัวประชาชน', `พบนักเรียนที่มีเลขประจำตัวประชาชนถูกต้อง <b>${sids.length}</b> คน${noCid ? `<br>ไม่มีเลขประชาชน ${noCid} แถว (ใช้รหัสเริ่มต้น 6 ตัวแทน)` : ''}${badCid ? `<br>⚠️ เลขไม่ถูกต้องตามหลักตรวจสอบ ${badCid} แถว (ข้าม)` : ''}${dupMsg}<br><br><span class="small muted">นักเรียนที่เปิดใช้งานบัญชีแล้วจะไม่ได้รับผลกระทบ</span>`, 'นำเข้า')) return;
+  loading(true, 'กำลังเตรียมข้อมูล...');
+  const vers = {}; (await F.getDocs(R.col('student_ver'))).docs.forEach(d => vers[d.id] = Number(d.data().v || 0));
+  const studs = {}; (await F.getDocs(R.col('students'))).docs.forEach(d => studs[d.id] = d.data());
+  const ops = [];
+  for (const sid of sids) {
+    const { cid, name } = found[sid];
+    const v = vers[sid] || 0;
+    ops.push([R.secret(sid), { h: await codeHash(sid, cid), mode: 'cid', v }, false]);
+    ops.push([F.doc(db, 'cid_index', await cidKey(cid)), { sid }, false]);
+    if (!(sid in vers)) ops.push([R.ver(sid), { v: 0 }, false]);
+    const st = studs[sid];
+    if (!st) ops.push([R.student(sid), { name, class: '', number: '', active: true, updated_at: F.serverTimestamp() }, false]);
+    else if (!st.name && name) ops.push([R.student(sid), { name }, true]);
+  }
+  for (let i = 0; i < ops.length; i += 450) {
+    loading(true, `กำลังบันทึก ${Math.min(i + 450, ops.length)}/${ops.length}`);
+    const b = F.writeBatch(db);
+    ops.slice(i, i + 450).forEach(([ref, data, merge]) => merge ? b.set(ref, data, { merge: true }) : b.set(ref, data));
+    await b.commit();
+  }
+  $('#cid-res').innerHTML = `<div class="alert ok small" style="margin-top:10px">นำเข้าเรียบร้อย ${sids.length} คน — นักเรียนเข้าสู่ระบบครั้งแรกด้วย เลขประจำตัวประชาชน + รหัสผ่าน = เลขประจำตัวนักเรียน${noCid ? `<br>นักเรียนที่ไม่มีเลขประชาชนในไฟล์ ใช้ "พิมพ์ใบรหัส" ในตารางด้านล่างแทน` : ''}${dupMsg}</div>`;
+}
 
 /* ---------------- รายวิชา–ครู ---------------- */
 VIEWS.courses = async () => {

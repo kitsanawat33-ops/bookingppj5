@@ -76,8 +76,14 @@ service cloud.firestore {
       allow read: if isStaff() || (isStudent() && sid == mySid());
       allow write: if dataAdmin();
     }
-    match /student_ver/{sid} {          // เลขรุ่นบัญชี (เปลี่ยนเมื่อรีเซ็ตรหัส) — ต้องอ่านได้ก่อนล็อกอิน
-      allow read: if true;
+    match /student_ver/{sid} {          // เลขรุ่นบัญชี (เปลี่ยนเมื่อรีเซ็ตรหัส) — ต้องอ่านได้ก่อนล็อกอิน (ทีละรายการ ห้าม list)
+      allow get: if true;
+      allow list: if isStaff();
+      allow write: if dataAdmin();
+    }
+    match /cid_index/{k} {              // ค่า hash ของเลขประจำตัวประชาชน → เลขประจำตัวนักเรียน (ไม่เก็บเลขจริง, ห้าม list)
+      allow get: if true;
+      allow list: if false;
       allow write: if dataAdmin();
     }
     match /student_secrets/{sid} {      // รหัสเริ่มต้น (สำหรับพิมพ์แจก) — นักเรียนอ่านไม่ได้
@@ -86,11 +92,14 @@ service cloud.firestore {
     match /student_links/{sid} {        // ผูกบัญชี Firebase กับเลขประจำตัว (เปิดใช้งานครั้งแรก)
       allow read: if isStaff() || (signedIn() && resource.data.uid == request.auth.uid);
       allow create: if isStudentEmail() && mySid() == sid
-        && request.resource.data.keys().hasOnly(['uid', 'h', 'at'])
+        && request.resource.data.keys().hasOnly(['uid', 'h', 'at', 'dflt'])
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.h == get(p('student_secrets/' + sid)).data.h
         && stuLocal() == (get(p('student_secrets/' + sid)).data.v == 0
               ? sid : sid + '.v' + string(get(p('student_secrets/' + sid)).data.v));
+      allow update: if signedIn() && resource.data.uid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['dflt'])
+        && request.resource.data.dflt == false;
       allow delete: if dataAdmin();
     }
 
@@ -193,7 +202,12 @@ service cloud.firestore {
             && chg(['status', 'academic_comment', 'signs', 'updated_at']) && voided(['teacher', 'measure']))
         || (hasRole('academic') && from(['ACADEMIC_APPROVED']) && to('IN_MEMO')
             && chg(['status', 'memo_id', 'memo_no', 'updated_at'])
-            && rid in memoAfter().request_ids && memoAfter().status == 'PENDING')
+            && rid in memoAfter().request_ids && memoAfter().status == 'PENDING'
+            && memoAfter().items[rid].new_grade == resource.data.new_grade
+            && memoAfter().items[rid].grade_key == resource.data.grade_key
+            && memoAfter().items[rid].original_grade == resource.data.original_grade
+            && memoAfter().items[rid].student_id == resource.data.student_id
+            && memoAfter().items[rid]['class'] == resource.data['class'])
         // ผู้อำนวยการ (เปลี่ยนพร้อมบันทึกข้อความใน batch เดียวกัน)
         || (hasRole('director') && from(['IN_MEMO'])
             && chg(['status', 'director_comment', 'memo_id', 'memo_no', 'updated_at'])
@@ -224,13 +238,27 @@ service cloud.firestore {
       }
     }
 
+    // ---------- ผลการเรียนที่ ผอ. อนุมัติแก้ไขแล้ว (เขียนพร้อม ผอ. อนุมัติบันทึก) ----------
+    match /fixes/{gk} {
+      allow read: if isStaff() || (isStudent() && resource.data.student_id == mySid());
+      allow create, update: if hasRole('director')
+        && getAfter(p('memos/' + request.resource.data.memo_id)).data.status == 'APPROVED'
+        && getAfter(p('memos/' + request.resource.data.memo_id)).data.items[request.resource.data.request_id].grade_key == gk
+        && getAfter(p('memos/' + request.resource.data.memo_id)).data.items[request.resource.data.request_id].new_grade == request.resource.data.new_grade
+        && getAfter(p('memos/' + request.resource.data.memo_id)).data.items[request.resource.data.request_id].original_grade == request.resource.data.original_grade
+        && getAfter(p('memos/' + request.resource.data.memo_id)).data.items[request.resource.data.request_id].student_id == request.resource.data.student_id
+        && getAfter(p('memos/' + request.resource.data.memo_id)).data.items[request.resource.data.request_id]['class'] == request.resource.data['class'];
+      allow delete: if false;
+    }
+
     // ---------- บันทึกข้อความ ----------
     match /memos/{mid} {
       allow read: if oversight();
       allow create: if hasRole('academic')
         && request.resource.data.status == 'PENDING'
         && request.resource.data.signs.academic.email == email()
-        && request.resource.data.request_ids is list && request.resource.data.request_ids.size() > 0;
+        && request.resource.data.request_ids is list && request.resource.data.request_ids.size() > 0
+        && request.resource.data.items is map && request.resource.data.items.size() == request.resource.data.request_ids.size();
       allow update: if hasRole('director') && resource.data.status == 'PENDING'
         && request.resource.data.status in ['APPROVED', 'REJECTED', 'RETURNED']
         && request.resource.data.diff(resource.data).affectedKeys()
