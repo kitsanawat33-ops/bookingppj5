@@ -112,7 +112,7 @@ async function installApp() {
       <li>เปิดเว็บนี้ด้วย <b>Safari</b></li>
       <li>แตะปุ่ม <b>แชร์</b> <span style="font-size:1.2em">⎋</span> (สี่เหลี่ยมมีลูกศรชี้ขึ้น) ด้านล่างจอ</li>
       <li>เลื่อนลงแล้วแตะ <b>เพิ่มไปยังหน้าจอโฮม</b> (Add to Home Screen)</li>
-      <li>แตะ <b>เพิ่ม</b> — ไอคอน “แก้ผลการเรียน” จะอยู่บนหน้าจอโฮม</li></ol>
+      <li>แตะ <b>เพิ่ม</b> — ไอคอน “PPJ GRADIX” จะอยู่บนหน้าจอโฮม</li></ol>
       <div class="alert info small" style="margin-top:12px">ครู/บุคลากรที่เข้าด้วย Google หากเปิดจากไอคอนแล้วเข้าสู่ระบบไม่ได้ ให้ใช้ผ่าน Safari ตามปกติ</div></div>
     <div class="modal-f"><button class="btn" data-close>เข้าใจแล้ว</button></div>`);
 }
@@ -272,8 +272,9 @@ function renderLogin(msg) {
   $('#app').innerHTML = `
   <div class="login-wrap"><div class="login">
     <div class="center" style="margin-bottom:14px">
-      <div class="brand" style="justify-content:center"><div class="logo">✎</div></div>
-      <h2>ระบบยื่นคำร้องแก้ไขผลการเรียน</h2>
+      <div class="brand" style="justify-content:center"><div class="logo lg">PPJ</div></div>
+      <h2 class="app-name">PPJ GRADIX</h2>
+      <div class="muted">ระบบยื่นคำร้องแก้ไขผลการเรียน</div>
       <div class="muted">${sn}</div>
     </div>
     <div class="card">
@@ -459,10 +460,11 @@ function renderShell() {
   $('#app').innerHTML = `
   <div class="shell">
     <aside class="side" id="side">
-      <div class="brand"><div class="logo">✎</div><div>แก้ไขผลการเรียน<small>${esc(S.settings.school_name)}</small></div></div>
+      <div class="brand"><div class="logo">PPJ</div><div><span class="app-name">PPJ GRADIX</span><small>${esc(S.settings.school_name)}</small></div></div>
       <nav class="nav" id="nav"></nav>
       <div style="padding:14px 6px 0">${installBtn('block')}</div>
     </aside>
+    <div class="side-backdrop" id="side-bd"></div>
     <main class="main">
       <div class="top">
         <div class="row"><button class="btn sm menu-btn" id="menu-btn">☰</button><h2 id="view-title"></h2></div>
@@ -479,7 +481,9 @@ function renderShell() {
   </div>`;
   document.body.classList.toggle('stu', isStudent());
   $('#logout').onclick = async () => { if (await confirmDlg('ออกจากระบบ', 'ต้องการออกจากระบบใช่ไหม', 'ออกจากระบบ')) { location.hash = ''; F.signOut(auth); } };
-  $('#menu-btn').onclick = () => $('#side').classList.toggle('open');
+  const sideOpen = on => { $('#side').classList.toggle('open', on); $('#side-bd').classList.toggle('on', on); };
+  $('#menu-btn').onclick = () => sideOpen(!$('#side').classList.contains('open'));
+  $('#side-bd').onclick = () => sideOpen(false);
   const gs = $('#go-semail'); if (gs) gs.onclick = e => { e.preventDefault(); go('semail'); };
   renderNav(); refreshInstall();
   renderView();
@@ -499,7 +503,7 @@ function renderNav() {
     $$('a[data-tv]', tb).forEach(a => a.onclick = () => go(a.dataset.tv));
   }
 }
-function go(v) { S.view = v; location.hash = v; $('#side') && $('#side').classList.remove('open'); renderNav(); renderView(); }
+function go(v) { S.view = v; location.hash = v; $('#side') && $('#side').classList.remove('open'); $('#side-bd') && $('#side-bd').classList.remove('on'); renderNav(); renderView(); }
 
 function renderView(isLiveRefresh) {
   const n = NAV.find(x => x.id === S.view);

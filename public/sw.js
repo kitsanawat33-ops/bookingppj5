@@ -1,7 +1,7 @@
 // Service Worker — ระบบยื่นคำร้องแก้ไขผลการเรียน
 // หลักการ: ไฟล์หน้าเว็บของเราใช้ "network-first" (ได้เวอร์ชันล่าสุดทุกครั้งที่ออนไลน์ ออฟไลน์จึงใช้สำเนา)
 // ไม่แคชข้อมูล Firestore / Apps Script / การเข้าสู่ระบบ (ข้อมูลต้องสดและเป็นส่วนตัว)
-const VERSION = 'v1';
+const VERSION = 'v2';
 const SHELL = 'gf-shell-' + VERSION;
 const LIBS = 'gf-libs-' + VERSION;
 const SHELL_FILES = ['/', '/index.html', '/styles.css', '/app.js', '/fb.js', '/config.js', '/pp6.js',

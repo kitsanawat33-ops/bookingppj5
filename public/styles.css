@@ -21,7 +21,10 @@ button,input,select,textarea{font:inherit;color:inherit}
 .shell{display:grid;grid-template-columns:250px 1fr;min-height:100vh}
 .side{background:#fff;border-right:1px solid var(--line);padding:18px 12px;position:sticky;top:0;height:100vh;overflow:auto}
 .brand{display:flex;gap:10px;align-items:center;padding:4px 8px 16px;font-size:1.02rem;line-height:1.25}
-.brand .logo{width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,#6366f1,#22c55e);display:grid;place-items:center;color:#fff;font-size:1.1rem;flex:none}
+.brand .logo{width:40px;height:40px;border-radius:9px;background:#2563e9;display:grid;place-items:center;color:#fff;font:700 .92rem/1 'Kanit',system-ui,sans-serif;letter-spacing:.02em;flex:none}
+.brand .logo.lg{width:72px;height:72px;border-radius:16px;font-size:1.6rem;margin-bottom:8px}
+.app-name{font-family:'Kanit',sans-serif;font-weight:600;letter-spacing:.04em;color:#1e3a8a}
+h2.app-name{font-size:1.6rem;margin:0}
 .brand small{display:block;font-family:'Sarabun';color:var(--muted);font-size:.78rem;font-weight:400}
 .nav a{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:10px;color:var(--ink);text-decoration:none;margin:2px 0;cursor:pointer}
 .nav a:hover{background:#f3f4f6}.nav a.on{background:var(--pri-2);color:var(--pri);font-weight:600}
@@ -250,4 +253,10 @@ iframe.memo{width:100%;height:70vh;border:1px solid var(--line);border-radius:10
   .steps .step{font-size:.72rem}
   .pick{padding:12px}
   .pick input{width:22px;height:22px}
+}
+
+/* ฉากหลังเมื่อเปิดเมนูซ้ายบนมือถือ: แตะเพื่อปิด */
+.side-backdrop{display:none}
+@media(max-width:900px){
+  .side-backdrop.on{display:block;position:fixed;inset:0;background:rgba(17,24,39,.35);z-index:45}
 }

@@ -1,6 +1,6 @@
 {
-  "name": "ระบบยื่นคำร้องแก้ไขผลการเรียน",
-  "short_name": "แก้ผลการเรียน",
+  "name": "PPJ GRADIX — ระบบยื่นคำร้องแก้ไขผลการเรียน",
+  "short_name": "PPJ GRADIX",
   "description": "ยื่นคำร้องแก้ไขผลการเรียน 0 ร มส มผ ติดตามสถานะ และส่งงานออนไลน์",
   "id": "/",
   "start_url": "/?source=pwa",
@@ -10,7 +10,7 @@
   "lang": "th",
   "dir": "ltr",
   "background_color": "#f5f7fb",
-  "theme_color": "#4f46e5",
+  "theme_color": "#2563e9",
   "categories": ["education", "productivity"],
   "icons": [
     { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
