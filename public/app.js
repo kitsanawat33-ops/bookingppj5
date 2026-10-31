@@ -284,6 +284,7 @@ function renderLogin(msg) {
     </div>
     <div class="center small muted" style="margin-top:12px">ผล 0 · ร · มส · มผ — ยื่นคำร้อง ติดตามสถานะ และส่งงานออนไลน์</div>
     <div class="center" style="margin-top:12px">${installBtn()}</div>
+    <div class="credit">พัฒนาโดย <b>KITSANAWAT PIXEL MATH STUDIO</b></div>
   </div></div>`;
   refreshInstall();
   const tabs = { stu: $('#t-stu'), staff: $('#t-staff') };
@@ -444,7 +445,7 @@ const NAV = [
   { id: 'academic', label: 'รออนุมัติ (วิชาการ)', ico: '🏫', roles: ['academic'], cnt: 'academic' },
   { id: 'all', label: 'ติดตามคำร้องทั้งหมด', ico: '🔎', roles: ['measure', 'academic', 'director', 'admin'] },
   { id: 'sgrades', label: 'ผลการเรียนนักเรียน', ico: '📋', staff: true },
-  { id: 'signature', label: 'ลายเซ็นของฉัน', ico: '🖊️', staff: true },
+  { id: 'signature', label: 'ลายเซ็นของฉัน', ico: '🖊️', roles: ['__hidden'] },   // ซ่อนไว้ (ใช้เมื่อเปิดบันทึกข้อความถึง ผอ. อีกครั้ง)
   { sec: 'จัดการข้อมูล', roles: ['admin', 'measure'] },
   { id: 'import', label: 'นำเข้าผลการเรียน', ico: '⬆️', roles: ['admin', 'measure'] },
   { id: 'students', label: 'นักเรียน / รหัสเริ่มต้น', ico: '🎓', roles: ['admin', 'measure'] },
@@ -463,6 +464,7 @@ function renderShell() {
       <div class="brand"><div class="logo">PPJ</div><div><span class="app-name">PPJ GRADIX</span><small>${esc(S.settings.school_name)}</small></div></div>
       <nav class="nav" id="nav"></nav>
       <div style="padding:14px 6px 0">${installBtn('block')}</div>
+      <div class="credit side-credit">พัฒนาโดย<br><b>KITSANAWAT PIXEL MATH STUDIO</b></div>
     </aside>
     <div class="side-backdrop" id="side-bd"></div>
     <main class="main">
@@ -870,13 +872,13 @@ function drawGroup(m, st) {
       <div class="sel-list">${sub.map(r => `<label class="sel-row">${cb(r)}<span class="grow"><b>${esc(r.subject_code)}</b> ${esc(r.subject_name)}</span>
         ${gradeChip(r.original_grade, 'fail')} → <select class="in sm" data-g="${esc(r.id)}"><option value="">ผลใหม่</option>${allowedOf(r).map(x => `<option ${x === (keep['g' + r.id] || r.new_grade) ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>`).join('')}</div>
       <textarea class="in" id="a-mcomment" rows="2" placeholder="ความเห็น (จำเป็นเมื่อส่งกลับหรือไม่อนุมัติ)"></textarea>
-      <div class="row act-btns"><button class="btn ok" id="a-mok" ${files.length ? '' : 'disabled'}>✓ รับรองวิชาที่เลือก เสนอวิชาการ (ลงนาม)</button>
+      <div class="row act-btns"><button class="btn ok" id="a-mok" ${files.length ? '' : 'disabled'}>✓ รับรองวิชาที่เลือก เสนอวิชาการ</button>
       <button class="btn warn" id="a-mret">ส่งกลับให้นักเรียนแนบใหม่</button><button class="btn bad" id="a-mno">ไม่อนุมัติ</button></div></div>`);
   if (canA) panels.push(`<div class="card act info"><h3>ฝ่ายวิชาการ: อนุมัติการแก้ไขผลการเรียน</h3>
       <div class="sel-list">${ma.map(r => `<label class="sel-row">${cb(r)}<span class="grow"><b>${esc(r.subject_code)}</b> ${esc(r.subject_name)}</span>
         ${gradeChip(r.original_grade, 'fail')} → ${gradeChip(r.new_grade, 'fixed')}</label>`).join('')}</div>
       <textarea class="in" id="a-accomment" rows="2" placeholder="ความเห็น (จำเป็นเมื่อส่งกลับหรือไม่อนุมัติ)"></textarea>
-      <div class="row act-btns"><button class="btn ok" id="a-acok">✓ อนุมัติวิชาที่เลือก (ลงนาม)</button><button class="btn warn" id="a-acret-m">ส่งกลับงานวัดผล</button>
+      <div class="row act-btns"><button class="btn ok" id="a-acok">✓ อนุมัติวิชาที่เลือก</button><button class="btn warn" id="a-acret-m">ส่งกลับงานวัดผล</button>
       <button class="btn warn" id="a-acret">ส่งกลับให้นักเรียนแนบใหม่</button><button class="btn bad" id="a-acno">ไม่อนุมัติ</button></div></div>`);
   body.innerHTML = `
     ${stepper(gs)}
@@ -903,13 +905,9 @@ function drawGroup(m, st) {
   bindGroup(body, st, { sub, ma, rev, ev });
 }
 
+// ยืนยันก่อนรับรอง/อนุมัติ — ไม่ต้องมีรูปลายเซ็น ระบบบันทึกชื่อ ตำแหน่ง และเวลาของเซิร์ฟเวอร์ไว้เป็นหลักฐาน
 async function requireSignature(text) {
-  if (!S.me.has_signature) {
-    toast('กรุณาบันทึกลายเซ็นก่อนลงนาม', 'bad'); closeModal(); go('signature'); return false;
-  }
-  const s = await F.getDoc(R.sig(S.me.email));
-  const png = s.exists() ? s.data().png : '';
-  return confirmDlg('ยืนยันการลงนามอิเล็กทรอนิกส์', `<p>${esc(text)}</p><div class="center"><img class="sigprev" src="${png}"><div>(${esc(S.me.name)})</div><div class="small muted">${esc(S.me.position)}</div></div>`, 'ลงนาม', 'ok');
+  return confirmDlg('ยืนยันการดำเนินการ', `<p>${esc(text)}</p><div class="box center small">ดำเนินการโดย <b>${esc(S.me.name)}</b>${S.me.position ? '<br>' + esc(S.me.position) : ''}<div class="muted">ระบบบันทึกชื่อและเวลาไว้เป็นหลักฐาน</div></div>`, 'ยืนยัน', 'ok');
 }
 const mySign = () => ({ email: S.me.email, name: S.me.name, position: S.me.position || '', at: F.serverTimestamp() });
 
@@ -1052,7 +1050,6 @@ VIEWS.dash = async () => {
   const todo = [];
   if (c.measure) todo.push(`<a href="#" data-go="measure">รองานวัดผลตรวจหลักฐาน <b>${c.measure}</b></a>`);
   if (c.academic) todo.push(`<a href="#" data-go="academic">รอวิชาการอนุมัติ <b>${c.academic}</b></a>`);
-  if (!S.me.has_signature && (hasRole('measure') || hasRole('academic'))) todo.unshift(`<a href="#" data-go="signature">⚠️ ยังไม่ได้บันทึกลายเซ็นอิเล็กทรอนิกส์</a>`);
   v.innerHTML = `
     <div class="small muted" style="margin-bottom:10px">${oversight() ? `ภาพรวมทั้งโรงเรียน ภาคเรียนที่ ${esc(s)}/${esc(y)}` : 'ครูดูผลการเรียนและพิมพ์รายงานได้ที่เมนู "ผลการเรียนนักเรียน" — คำร้องแก้ไขผลการเรียนดำเนินการโดยงานวัดผลและฝ่ายวิชาการ'}</div>
     ${todo.length ? `<div class="alert info" style="margin-bottom:14px"><b>งานที่รอคุณ</b><div>${todo.join(' · ')}</div></div>` : ''}
@@ -1085,13 +1082,13 @@ VIEWS.dash = async () => {
 };
 
 VIEWS.measure = () => {
-  $('#view').innerHTML = `<div class="card"><p class="muted small" style="margin-top:0">คำร้องที่นักเรียนแนบใบแก้ 0 / ร แล้ว — เปิดดูหลักฐาน เลือกผลการเรียนใหม่ แล้วลงนามเสนอฝ่ายวิชาการ</p>${reqTable(byUpdated(S.live.measure || []).reverse(), { noTeacher: true, files: true })}</div>`;
+  $('#view').innerHTML = `<div class="card"><p class="muted small" style="margin-top:0">คำร้องที่นักเรียนแนบใบแก้ 0 / ร แล้ว — เปิดดูหลักฐาน เลือกผลการเรียนใหม่ แล้วรับรองเสนอฝ่ายวิชาการ</p>${reqTable(byUpdated(S.live.measure || []).reverse(), { noTeacher: true, files: true })}</div>`;
   bindReqTable($('#view'));
 };
 VIEWS.academic = () => {
   const rows = byUpdated(S.live.academic || []).reverse();
   $('#view').innerHTML = `<div class="card"><p class="muted small" style="margin-top:0">คำร้องที่งานวัดผลตรวจหลักฐานและเสนอผลการเรียนใหม่แล้ว — เปิดดูทีละรายการ หรือเลือกหลายรายการแล้วอนุมัติพร้อมกัน</p>
-    ${rows.length ? `<div class="row" style="margin-bottom:8px"><button class="btn ok" id="ac-bulk">✓ อนุมัติทุกวิชาในคำร้องที่เลือก (ลงนามครั้งเดียว)</button><span class="small muted">ต้องการอนุมัติบางวิชา ให้เปิดคำร้องนั้น</span></div>` : ''}
+    ${rows.length ? `<div class="row" style="margin-bottom:8px"><button class="btn ok" id="ac-bulk">✓ อนุมัติทุกวิชาในคำร้องที่เลือก (ยืนยันครั้งเดียว)</button><span class="small muted">ต้องการอนุมัติบางวิชา ให้เปิดคำร้องนั้น</span></div>` : ''}
     ${reqTable(rows, { noTeacher: true, check: true })}</div>`;
   const v = $('#view'); bindReqTable(v);
   const btn = $('#ac-bulk', v);

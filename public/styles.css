@@ -21,8 +21,8 @@ button,input,select,textarea{font:inherit;color:inherit}
 .shell{display:grid;grid-template-columns:250px 1fr;min-height:100vh}
 .side{background:#fff;border-right:1px solid var(--line);padding:18px 12px;position:sticky;top:0;height:100vh;overflow:auto}
 .brand{display:flex;gap:10px;align-items:center;padding:4px 8px 16px;font-size:1.02rem;line-height:1.25}
-.brand .logo{width:40px;height:40px;border-radius:9px;background:#2563e9;display:grid;place-items:center;color:#fff;font:700 .92rem/1 'Kanit',system-ui,sans-serif;letter-spacing:.02em;flex:none}
-.brand .logo.lg{width:72px;height:72px;border-radius:16px;font-size:1.6rem;margin-bottom:8px}
+.brand .logo{width:40px;height:40px;border-radius:7px;background:#0066f3;display:grid;place-items:center;color:#fff;font:600 .95rem/1 'Inter','Helvetica Neue',Arial,sans-serif;letter-spacing:.01em;flex:none}
+.brand .logo.lg{width:72px;height:72px;border-radius:12px;font-size:1.6rem;margin-bottom:8px}
 .app-name{font-family:'Kanit',sans-serif;font-weight:600;letter-spacing:.04em;color:#1e3a8a}
 h2.app-name{font-size:1.6rem;margin:0}
 .brand small{display:block;font-family:'Sarabun';color:var(--muted);font-size:.78rem;font-weight:400}
@@ -260,3 +260,9 @@ iframe.memo{width:100%;height:70vh;border:1px solid var(--line);border-radius:10
 @media(max-width:900px){
   .side-backdrop.on{display:block;position:fixed;inset:0;background:rgba(17,24,39,.35);z-index:45}
 }
+
+/* เครดิตผู้พัฒนา */
+.credit{text-align:center;font-size:.72rem;color:var(--muted);margin-top:14px;letter-spacing:.02em}
+.credit b{color:#2563e9;font-weight:600;letter-spacing:.06em}
+.side-credit{padding:18px 8px 6px;border-top:1px solid var(--line);margin-top:18px;line-height:1.6}
+@media(max-width:900px){ body.stu .main::after{content:'พัฒนาโดย KITSANAWAT PIXEL MATH STUDIO';display:block;text-align:center;font-size:.7rem;color:var(--muted);margin-top:18px;letter-spacing:.04em} }
