@@ -615,7 +615,7 @@ VIEWS.grades = async (live) => {
   const t = terms.find(x => x.id === sel);
   const rows = termRows(t);
   let cr = 0, pt = 0;
-  rows.forEach(r => { const c = parseFloat(r.sub.credit); if (/^[0-4](\.5)?$/.test(r.grade) && c > 0) { cr += c; pt += c * parseFloat(r.grade); } });
+  rows.forEach(r => { const c = parseFloat(r.sub.credit), gp = gradePoint(r.grade); if (gp !== null && c > 0) { cr += c; pt += c * gp; } });
   const gpa = cr ? (Math.floor(pt / cr * 100) / 100).toFixed(2) : '-';
   const pending = allFails.filter(r => r.active);
   v.innerHTML = `
@@ -627,7 +627,7 @@ VIEWS.grades = async (live) => {
       : `<div class="hero ok"><div class="hero-t">ไม่มีผลการเรียนที่ต้องแก้ไข 🎉</div></div>`}
     <div class="tabs scroll-x">${terms.map(x => `<button class="tab ${x.id === sel ? 'on' : ''}" data-t="${esc(x.id)}">ภาคเรียน ${esc(x.semester)}/${esc(x.academic_year)}</button>`).join('')}</div>
     <div class="row gpa-row"><div><div class="small muted">${esc(S.me.name)} · ${esc(S.me.sid)} · ${esc(t.class || S.me.cls)}</div>
-      <div>เกรดเฉลี่ย <b class="gpa">${gpa}</b></div></div><button class="btn sm" id="g-print">🖨️ พิมพ์</button></div>
+      <div>เกรดเฉลี่ย <b class="gpa">${gpa}</b></div>${rows.some(r => r.grade === 'ร' || r.grade === 'มส') ? '<div class="small muted">วิชาที่ติด ร/มส คิดเป็น 0 — แก้เสร็จแล้วคำนวณใหม่อัตโนมัติ</div>' : ''}</div><button class="btn sm" id="g-print">🖨️ พิมพ์</button></div>
     <div class="gcards">${rows.map(r => `<div class="gcard ${r.isFail ? 'fail' : ''}">
       <div class="gc-main"><div class="gc-code">${esc(r.code)} <span class="small muted">${esc(r.sub.credit || '')} นก.</span></div>
         <div class="gc-name">${esc(r.sub.name || '')}</div>
@@ -1348,9 +1348,12 @@ function termRowsFixed(t, fixes) {
     return { code, name: sub.name || '', credit: sub.credit || '', grade: fx ? fx.new_grade : sub.grade, fixed: fx || null, teacher: sub.teacher_name || '' };
   });
 }
+// เกรดเฉลี่ย: วิชาที่ติด ร / มส คิดเป็น 0 (เกรดที่แท้จริง) เมื่อแก้เสร็จระบบคำนวณใหม่ด้วยผลที่แก้แล้ว
+// มผ/ผ เป็นผลประเมินกิจกรรม ไม่นำมาคิด
+const gradePoint = g => /^[0-4](\.5)?$/.test(g) ? parseFloat(g) : (g === 'ร' || g === 'มส') ? 0 : null;
 function gpaOf(rows) {
   let c = 0, p = 0;
-  rows.forEach(r => { const cr = parseFloat(r.credit); if (/^[0-4](\.5)?$/.test(r.grade) && cr > 0) { c += cr; p += cr * parseFloat(r.grade); } });
+  rows.forEach(r => { const cr = parseFloat(r.credit), gp = gradePoint(r.grade); if (gp !== null && cr > 0) { c += cr; p += cr * gp; } });
   return { credits: c, gpa: c ? (Math.floor(p / c * 100) / 100).toFixed(2) : '-' };
 }
 function reportHtml(items) {
@@ -1368,6 +1371,7 @@ function reportHtml(items) {
         <td class="c"><b>${esc(r.grade || '')}</b></td><td class="sm">${r.fixed ? `แก้ไขจาก ${esc(r.fixed.original_grade)}${r.fixed.memo_no ? ' ตามบันทึกที่ ' + esc(r.fixed.memo_no) : ' (อนุมัติแล้ว)'}` : (failSet().includes(r.grade) ? 'ต้องดำเนินการแก้ไข' : '')}</td></tr>`).join('')}
       </tbody></table>
       <div class="sum"><span>หน่วยกิตที่คิดเกรดเฉลี่ย <b>${g.credits}</b></span><span>เกรดเฉลี่ย (GPA) <b>${g.gpa}</b></span><span>รายวิชาที่ยังติด 0/ร/มส/มผ <b>${fails}</b></span></div>
+      ${rows.some(r => r.grade === 'ร' || r.grade === 'มส') ? '<div class="sm" style="margin-top:2px">หมายเหตุ: รายวิชาที่ได้ ร หรือ มส คิดเป็น 0 ในการคำนวณเกรดเฉลี่ย จนกว่าจะแก้ไขผลการเรียน</div>' : ''}
       <div class="signs">
         <div><div class="ln">ลงชื่อ ...........................................</div><div>(...........................................)</div><div>ครูประจำชั้น / ครูที่ปรึกษา</div></div>
         <div><div class="ln">ลงชื่อ ...........................................</div><div>(...........................................)</div><div>นายทะเบียน / งานวัดผล</div></div>
