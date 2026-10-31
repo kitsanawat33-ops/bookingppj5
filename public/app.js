@@ -215,7 +215,7 @@ async function resolveMe(user) {
     const st = await F.getDoc(R.student(sid));
     const d = st.exists() ? st.data() : {};
     if (d.active === false) throw new Error('บัญชีนักเรียนถูกระงับ');
-    S.me = { type: 'student', sid, email: em, name: d.name || sid, cls: d.class || '', number: d.number || '', roles: ['student'], dflt: link.data().dflt === true };
+    S.me = { type: 'student', sid, email: em, name: d.name || sid, cls: d.class || '', number: d.number || '', roles: ['student'], contact: d.email || '' };
     return;
   }
   if (!user.emailVerified) throw new Error('อีเมลนี้ยังไม่ได้รับการยืนยัน');
@@ -281,9 +281,9 @@ function stuLoginForm() {
       <label class="f"><span>รหัสผ่าน</span><input class="in" type="password" name="pw" autocomplete="current-password" required></label>
       <button class="btn pri" style="width:100%;justify-content:center">เข้าสู่ระบบ</button>
     </form>
-    <div class="alert info small" style="margin-top:12px"><b>เข้าใช้ครั้งแรก:</b> ชื่อผู้ใช้ = เลขประจำตัวประชาชน 13 หลัก · รหัสผ่าน = เลขประจำตัวนักเรียน<br>เข้าแล้วเปลี่ยนรหัสผ่านใหม่ได้ที่เมนู "เปลี่ยนรหัสผ่าน"</div>
+    <div class="alert info small" style="margin-top:12px">ชื่อผู้ใช้ = <b>เลขประจำตัวประชาชน 13 หลัก</b> · รหัสผ่าน = <b>เลขประจำตัวนักเรียน</b></div>
     <div class="center" style="margin-top:10px"><a href="#" id="go-act">ได้รับรหัสเริ่มต้น 6 ตัวจากครู? เปิดใช้งานที่นี่</a></div>
-    <div class="center small muted" style="margin-top:6px">ลืมรหัสผ่าน ติดต่อครูที่ปรึกษาหรืองานวัดผลเพื่อรีเซ็ต</div>`;
+    <div class="center small muted" style="margin-top:6px">เข้าไม่ได้ ติดต่อครูที่ปรึกษาหรืองานวัดผลเพื่อรีเซ็ต</div>`;
   $('#go-act').onclick = e => { e.preventDefault(); stuActivateForm(); };
   $('#f-login').onsubmit = async e => {
     e.preventDefault();
@@ -337,7 +337,7 @@ async function activateStudent(sid, secret, pw, dflt) {
   try {
     try { cred = await F.createUserWithEmailAndPassword(auth, studentEmail(sid, v), pwX(pw)); }
     catch (e) {
-      if (e.code === 'auth/email-already-in-use') throw new Error(dflt ? 'รหัสผ่านไม่ถูกต้อง (บัญชีนี้เปลี่ยนรหัสผ่านแล้ว) หากลืมรหัสผ่านให้ติดต่อครูเพื่อรีเซ็ต' : 'บัญชีนี้เปิดใช้งานแล้ว ให้เข้าสู่ระบบด้วยรหัสผ่านที่ตั้งไว้');
+      if (e.code === 'auth/email-already-in-use') throw new Error(dflt ? 'รหัสผ่านไม่ถูกต้อง กรุณาติดต่อครูเพื่อรีเซ็ตบัญชี' : 'บัญชีนี้เปิดใช้งานแล้ว ให้เข้าสู่ระบบด้วยรหัสผ่านที่ตั้งไว้');
       throw e;
     }
     try {
@@ -405,7 +405,7 @@ const NAV = [
   { sec: 'นักเรียน', roles: ['student'] },
   { id: 'grades', label: 'ผลการเรียนของฉัน', ico: '📘', roles: ['student'] },
   { id: 'myreq', label: 'คำร้องของฉัน', ico: '📝', roles: ['student'], cnt: 'myreq' },
-  { id: 'spw', label: 'เปลี่ยนรหัสผ่าน', ico: '🔑', roles: ['student'] },
+  { id: 'semail', label: 'อีเมลรับข่าวสาร', ico: '✉️', roles: ['student'] },
   { sec: 'งานของฉัน', staff: true },
   { id: 'dash', label: 'ภาพรวม', ico: '📊', staff: true },
   { id: 'inbox', label: 'คำร้องถึงครู', ico: '📥', staff: true, cnt: 'inbox' },
@@ -444,13 +444,13 @@ function renderShell() {
           <button class="btn sm" id="logout">ออก</button>
         </div>
       </div>
-      ${isStudent() && S.me.dflt ? `<div class="alert warn small" style="margin-bottom:14px">🔑 คุณยังใช้รหัสผ่านเริ่มต้น (เลขประจำตัวนักเรียน) แนะนำให้ <a href="#" id="go-spw"><b>เปลี่ยนรหัสผ่าน</b></a> เพื่อป้องกันคนอื่นเข้าใช้แทน</div>` : ''}
+      ${isStudent() && !S.me.contact ? `<div class="alert info small" style="margin-bottom:14px">✉️ ใส่อีเมลของคุณเพื่อรับแจ้งเมื่อส่งคำร้องและเมื่อคำร้องได้รับการอนุมัติ — <a href="#" id="go-semail"><b>ตั้งค่าอีเมล</b></a></div>` : ''}
       <div id="view"></div>
     </main>
   </div>`;
   $('#logout').onclick = async () => { if (await confirmDlg('ออกจากระบบ', 'ต้องการออกจากระบบใช่ไหม', 'ออกจากระบบ')) { location.hash = ''; F.signOut(auth); } };
   $('#menu-btn').onclick = () => $('#side').classList.toggle('open');
-  const gs = $('#go-spw'); if (gs) gs.onclick = e => { e.preventDefault(); go('spw'); };
+  const gs = $('#go-semail'); if (gs) gs.onclick = e => { e.preventDefault(); go('semail'); };
   renderNav();
   renderView();
 }
@@ -607,7 +607,8 @@ function newRequestDlg(row) {
     });
     b.set(logRef(id), logData('ยื่นคำร้อง', (REQ_TYPE[g] || g) + ' — ' + reason, 'นักเรียน'));
     await b.commit();
-    closeModal(); toast('ส่งคำร้องเรียบร้อย ' + no, 'ok');
+    closeModal(); toast('ส่งคำร้องเรียบร้อย ' + no + (S.me.contact ? ' — ส่งอีเมลยืนยันไปที่ ' + S.me.contact : ''), 'ok');
+    notifyEmail('submitted', [id]);
   }, 'กำลังส่งคำร้อง...'));
 }
 
@@ -617,29 +618,28 @@ VIEWS.myreq = () => {
   bindReqTable($('#view'));
 };
 
-VIEWS.spw = () => {
-  $('#view').innerHTML = `<div class="card" style="max-width:460px">
-    ${S.me.dflt ? '<div class="alert warn small" style="margin-bottom:12px">ตอนนี้ใช้รหัสผ่านเริ่มต้น (เลขประจำตัวนักเรียน) ซึ่งเพื่อนอาจเดาได้ แนะนำให้ตั้งรหัสผ่านใหม่</div>' : ''}
-    <form id="f-pw">
-    <label class="f"><span>รหัสผ่านเดิม${S.me.dflt ? ' (เลขประจำตัวนักเรียน)' : ''}</span><input class="in" type="password" name="old" required></label>
-    <label class="f"><span>รหัสผ่านใหม่ (อย่างน้อย 6 ตัว)</span><input class="in" type="password" name="n1" minlength="6" required></label>
-    <label class="f"><span>ยืนยันรหัสผ่านใหม่</span><input class="in" type="password" name="n2" minlength="6" required></label>
-    <button class="btn pri">บันทึกรหัสผ่านใหม่</button></form></div>`;
-  $('#f-pw').onsubmit = e => {
-    e.preventDefault(); const f = e.target;
-    if (f.n1.value !== f.n2.value) return toast('รหัสผ่านใหม่ไม่ตรงกัน', 'bad');
-    if (f.n1.value.length < 6) return toast('รหัสผ่านใหม่ต้องมีอย่างน้อย 6 ตัว', 'bad');
-    if (f.n1.value === S.me.sid) return toast('ห้ามใช้เลขประจำตัวนักเรียนเป็นรหัสผ่านใหม่', 'bad');
-    quiet(run(async () => {
-      const u = auth.currentUser;
-      try { await F.reauthenticateWithCredential(u, F.EmailAuthProvider.credential(u.email, pwX(f.old.value))); }
-      catch (err) { throw new Error('รหัสผ่านเดิมไม่ถูกต้อง'); }
-      await F.updatePassword(u, pwX(f.n1.value));
-      if (S.me.dflt) { await F.updateDoc(R.link(S.me.sid), { dflt: false }); S.me.dflt = false; }
-      f.reset(); toast('เปลี่ยนรหัสผ่านเรียบร้อย', 'ok'); renderShell();
-    }));
+VIEWS.semail = () => {
+  $('#view').innerHTML = `<div class="card" style="max-width:520px"><h3>อีเมลรับข่าวสาร</h3>
+    <p class="small muted" style="margin-top:0">ระบบจะส่งอีเมลแจ้งคุณเมื่อ <b>ส่งคำร้องแก้ไขผลการเรียน</b> และเมื่อ <b>คำร้องได้รับการอนุมัติ</b> จากผู้อำนวยการ</p>
+    <form id="f-em"><label class="f"><span>อีเมลของนักเรียน (หรือผู้ปกครอง)</span><input class="in" type="email" name="em" value="${esc(S.me.contact || '')}" placeholder="name@example.com" maxlength="100"></label>
+    <div class="row"><button class="btn pri">บันทึกอีเมล</button>${S.me.contact ? '<button type="button" class="btn bad" id="em-clear">ยกเลิกการรับอีเมล</button>' : ''}</div></form></div>`;
+  const save = em => quiet(run(async () => {
+    await F.updateDoc(R.student(S.me.sid), { email: em, email_updated_at: F.serverTimestamp() });
+    S.me.contact = em; toast(em ? 'บันทึกอีเมลแล้ว' : 'ยกเลิกการรับอีเมลแล้ว', 'ok'); renderShell();
+  }));
+  $('#f-em').onsubmit = e => {
+    e.preventDefault(); const em = e.target.em.value.trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) return toast('รูปแบบอีเมลไม่ถูกต้อง', 'bad');
+    save(em);
   };
+  const c = $('#em-clear'); if (c) c.onclick = () => save('');
 };
+
+/** แจ้งเตือนทางอีเมลผ่าน Apps Script (ไม่ให้ความผิดพลาดของอีเมลกระทบงานหลัก) */
+function notifyEmail(event, ids) {
+  if (!GAS_URL || !ids.length) return;
+  gasCall({ action: 'notify', event, request_ids: ids }).catch(e => console.warn('notify', e));
+}
 
 /* =========================== รายละเอียดคำร้อง =========================== */
 function canFlags(r) {
@@ -1156,6 +1156,7 @@ async function decideMemo(m, rs, d, c) {
       (d === 'approve' ? 'ปรับผลการเรียน ' + r.original_grade + ' → ' + r.new_grade + ' (บันทึกที่ ' + m.memo_no + ')' : c), 'ผู้อำนวยการ'));
   });
   await b.commit();
+  if (d === 'approve') notifyEmail('approved', rs.map(r => r.id));
 }
 
 VIEWS.director = () => {

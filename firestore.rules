@@ -75,6 +75,11 @@ service cloud.firestore {
     match /students/{sid} {
       allow read: if isStaff() || (isStudent() && sid == mySid());
       allow write: if dataAdmin();
+      // นักเรียนแก้ได้เฉพาะอีเมลรับข่าวสารของตัวเอง
+      allow update: if isStudent() && sid == mySid()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'email_updated_at'])
+        && (request.resource.data.email == '' || request.resource.data.email.matches('^[^@\\s]+@[^@\\s]+[.][^@\\s]+$'))
+        && request.resource.data.email.size() <= 100;
     }
     match /student_ver/{sid} {          // เลขรุ่นบัญชี (เปลี่ยนเมื่อรีเซ็ตรหัส) — ต้องอ่านได้ก่อนล็อกอิน (ทีละรายการ ห้าม list)
       allow get: if true;

@@ -24,6 +24,7 @@ function doPost(e) {
     const email = String(claims.email || '').toLowerCase();
     if (body.action === 'upload') return out_(upload_(body, token, email));
     if (body.action === 'download') return out_(download_(body, token));
+    if (body.action === 'notify') return out_(notify_(body, token));
     throw new Error('ไม่รู้จักคำสั่ง');
   } catch (err) {
     return out_(null, err);
@@ -70,6 +71,51 @@ function download_(b, token) {
   return { name: file.getName(), mime: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
 }
 
+/* ---------- แจ้งเตือนทางอีเมล ----------
+ * ส่งได้เฉพาะเมื่อสถานะคำร้องตรงกับเหตุการณ์จริง (อ่านจาก Firestore ในนามผู้เรียก) และส่งซ้ำไม่ได้ */
+const APP_URL = 'https://ppj-grade-fix.web.app';
+const SCHOOL_NAME = 'โรงเรียนบ้านโพนแพง เจียรวนนท์อุทิศ 5';
+function notify_(b, token) {
+  const ev = String(b.event || '');
+  const need = { submitted: 'SUBMITTED', approved: 'COMPLETED' }[ev];
+  if (!need) throw new Error('ไม่รู้จักเหตุการณ์');
+  const props = PropertiesService.getScriptProperties();
+  let sent = 0;
+  (b.request_ids || []).slice(0, 60).forEach(rid => {
+    rid = String(rid);
+    const key = 'mail_' + ev + '_' + rid;
+    if (props.getProperty(key)) return;
+    const f = fields_(fsGet_('requests/' + encodeURIComponent(rid), token));
+    if (f.status !== need) return;
+    let to = '';
+    try { to = fields_(fsGet_('students/' + encodeURIComponent(f.student_id), token)).email || ''; } catch (e) { return; }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return;
+    if (MailApp.getRemainingDailyQuota() < 1) throw new Error('โควตาส่งอีเมลวันนี้หมดแล้ว');
+    const subj = ev === 'submitted'
+      ? 'ได้รับคำร้องแก้ไขผลการเรียน ' + f.subject_code + ' แล้ว (' + f.request_no + ')'
+      : 'คำร้องแก้ไขผลการเรียน ' + f.subject_code + ' ได้รับการอนุมัติแล้ว';
+    const lines = ev === 'submitted'
+      ? ['ระบบได้รับคำร้องแก้ไขผลการเรียนของคุณแล้ว และส่งถึงครูผู้สอนเรียบร้อย',
+         'กรุณาติดตามงานที่ครูมอบหมายในระบบ']
+      : ['ผู้อำนวยการอนุมัติการแก้ไขผลการเรียนของคุณแล้ว',
+         'ผลการเรียนใหม่: <b>' + f.original_grade + ' → ' + f.new_grade + '</b>' + (f.memo_no ? ' (บันทึกข้อความที่ ' + f.memo_no + ')' : '')];
+    const html = '<div style="font-family:Tahoma,sans-serif;font-size:14px;line-height:1.6">' +
+      '<p>เรียน ' + esc_(f.student_name) + ' (' + esc_(f.student_id) + ')</p>' +
+      lines.map(l => '<p>' + l + '</p>').join('') +
+      '<table style="border-collapse:collapse" cellpadding="4">' +
+      '<tr><td>เลขคำร้อง</td><td><b>' + esc_(f.request_no) + '</b></td></tr>' +
+      '<tr><td>รายวิชา</td><td>' + esc_(f.subject_code + ' ' + f.subject_name) + '</td></tr>' +
+      '<tr><td>ภาคเรียน</td><td>' + esc_(f.semester + '/' + f.academic_year) + '</td></tr></table>' +
+      '<p><a href="' + APP_URL + '">เข้าสู่ระบบเพื่อดูรายละเอียด</a></p>' +
+      '<p style="color:#777;font-size:12px">อีเมลนี้ส่งอัตโนมัติจากระบบยื่นคำร้องแก้ไขผลการเรียน ' + SCHOOL_NAME + ' — ไม่ต้องตอบกลับ</p></div>';
+    MailApp.sendEmail({ to: to, subject: subj, htmlBody: html, name: 'ระบบแก้ไขผลการเรียน ' + SCHOOL_NAME });
+    props.setProperty(key, new Date().toISOString());
+    sent++;
+  });
+  return { sent: sent };
+}
+function esc_(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
 /* ---------- helpers ---------- */
 function fsGet_(path, token) {
   const url = 'https://firestore.googleapis.com/v1/projects/' + FIREBASE_PROJECT_ID + '/databases/(default)/documents/' + path;
@@ -111,4 +157,4 @@ function out_(data, err) {
 }
 
 /** รันครั้งแรกจาก editor เพื่ออนุญาตสิทธิ์ Drive / UrlFetch */
-function authorize() { root_(); UrlFetchApp.fetch('https://www.google.com'); Logger.log('พร้อมใช้งาน: ' + root_().getUrl()); }
+function authorize() { root_(); UrlFetchApp.fetch('https://www.google.com'); Logger.log('พร้อมใช้งาน: ' + root_().getUrl() + ' · โควตาอีเมลวันนี้: ' + MailApp.getRemainingDailyQuota()); }
