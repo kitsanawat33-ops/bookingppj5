@@ -2,8 +2,17 @@
 <html lang="th">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>ระบบยื่นคำร้องแก้ไขผลการเรียน</title>
+  <meta name="description" content="ยื่นคำร้องแก้ไขผลการเรียน 0 ร มส มผ ติดตามสถานะ และส่งงานออนไลน์">
+  <meta name="theme-color" content="#4f46e5">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="แก้ผลการเรียน">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;500;600&family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
@@ -14,5 +23,12 @@
   <div id="toast-root"></div>
   <div id="loading" class="loading hidden"><div class="spinner"></div><div id="loading-text">กำลังโหลด...</div></div>
   <script type="module" src="app.js"></script>
+  <script>
+    // ติดตั้งเป็นแอป (PWA): เก็บเหตุการณ์ไว้ให้ปุ่ม "ติดตั้งแอป" ใช้ภายหลัง
+    window.__pwa = { prompt: null };
+    addEventListener('beforeinstallprompt', e => { e.preventDefault(); window.__pwa.prompt = e; dispatchEvent(new Event('pwa-installable')); });
+    addEventListener('appinstalled', () => { window.__pwa.prompt = null; dispatchEvent(new Event('pwa-installable')); });
+    if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+  </script>
 </body>
 </html>

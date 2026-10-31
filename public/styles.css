@@ -150,3 +150,9 @@ table.tbl{width:100%;border-collapse:collapse;font-size:.92rem}
 .empty{padding:30px;text-align:center;color:var(--muted)}
 .bar{height:8px;border-radius:99px;background:#eef2ff;overflow:hidden}.bar>i{display:block;height:100%;background:var(--pri)}
 iframe.memo{width:100%;height:70vh;border:1px solid var(--line);border-radius:10px;background:#fff}
+
+/* PWA */
+[hidden]{display:none!important}
+.btn.block{width:100%;justify-content:center;white-space:normal}
+.install-btn{background:var(--pri-2);border-color:#c7d2fe;color:var(--pri)}
+@media (display-mode: standalone){ body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)} }

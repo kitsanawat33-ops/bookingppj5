@@ -74,7 +74,10 @@ function errMsg(e) {
     'auth/invalid-credential': 'เลขประจำตัวหรือรหัสผ่านไม่ถูกต้อง', 'auth/wrong-password': 'รหัสผ่านไม่ถูกต้อง',
     'auth/user-not-found': 'ยังไม่ได้เปิดใช้งานบัญชี', 'auth/too-many-requests': 'ลองหลายครั้งเกินไป กรุณารอสักครู่',
     'auth/weak-password': 'รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร', 'auth/popup-closed-by-user': 'ปิดหน้าต่างเข้าสู่ระบบก่อนเสร็จ',
-    'auth/network-request-failed': 'เชื่อมต่ออินเทอร์เน็ตไม่ได้', 'unavailable': 'เชื่อมต่อฐานข้อมูลไม่ได้ชั่วคราว'
+    'auth/network-request-failed': 'เชื่อมต่ออินเทอร์เน็ตไม่ได้', 'unavailable': 'เชื่อมต่อฐานข้อมูลไม่ได้ชั่วคราว',
+    'auth/popup-blocked': 'เบราว์เซอร์บล็อกหน้าต่างเข้าสู่ระบบ — อนุญาตป๊อปอัป หรือเปิดเว็บใน Chrome/Safari แล้วลองใหม่',
+    'auth/operation-not-supported-in-this-environment': 'แอปที่ติดตั้งบนเครื่องนี้เปิดหน้าต่าง Google ไม่ได้ — ครูกรุณาเข้าผ่านเบราว์เซอร์ (Chrome/Safari) แทน',
+    'auth/web-storage-unsupported': 'เบราว์เซอร์นี้ปิดการเก็บข้อมูล — ลองเปิดใน Chrome/Safari'
   };
   return map[c] || (e && e.message) || String(e);
 }
@@ -85,6 +88,36 @@ async function run(fn, text) {
   finally { loading(false); }
 }
 const quiet = p => p.catch(() => {});
+
+/* ------------------------------ PWA (ติดตั้งเป็นแอป) ------------------------------ */
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const canInstall = () => !isStandalone() && !!((window.__pwa && window.__pwa.prompt) || isIOS());
+const installBtn = (extra = '') => `<button type="button" class="btn sm install-btn ${extra}" hidden>📲 ติดตั้งแอปบนมือถือ/คอมพิวเตอร์</button>`;
+function refreshInstall() {
+  $$('.install-btn').forEach(b => { b.hidden = !canInstall(); b.onclick = installApp; });
+}
+async function installApp() {
+  const ev = window.__pwa && window.__pwa.prompt;
+  if (ev) {
+    ev.prompt();
+    const r = await ev.userChoice.catch(() => null);
+    window.__pwa.prompt = null; refreshInstall();
+    if (r && r.outcome === 'accepted') toast('ติดตั้งแอปแล้ว เปิดได้จากหน้าจอหลัก', 'ok');
+    return;
+  }
+  if (isIOS()) modal(`<div class="modal-h"><h3>ติดตั้งแอปบน iPhone / iPad</h3><button class="x" data-close>×</button></div>
+    <div class="modal-b"><ol style="line-height:2;margin:0;padding-left:20px">
+      <li>เปิดเว็บนี้ด้วย <b>Safari</b></li>
+      <li>แตะปุ่ม <b>แชร์</b> <span style="font-size:1.2em">⎋</span> (สี่เหลี่ยมมีลูกศรชี้ขึ้น) ด้านล่างจอ</li>
+      <li>เลื่อนลงแล้วแตะ <b>เพิ่มไปยังหน้าจอโฮม</b> (Add to Home Screen)</li>
+      <li>แตะ <b>เพิ่ม</b> — ไอคอน “แก้ผลการเรียน” จะอยู่บนหน้าจอโฮม</li></ol>
+      <div class="alert info small" style="margin-top:12px">ครู/บุคลากรที่เข้าด้วย Google หากเปิดจากไอคอนแล้วเข้าสู่ระบบไม่ได้ ให้ใช้ผ่าน Safari ตามปกติ</div></div>
+    <div class="modal-f"><button class="btn" data-close>เข้าใจแล้ว</button></div>`);
+}
+addEventListener('pwa-installable', refreshInstall);
+addEventListener('offline', () => toast('ขาดการเชื่อมต่ออินเทอร์เน็ต — ข้อมูลจะไม่อัปเดตจนกว่าจะเชื่อมต่อใหม่', 'bad'));
+addEventListener('online', () => toast('เชื่อมต่ออินเทอร์เน็ตแล้ว', 'ok'));
 
 function toDate(ts) { if (!ts) return null; if (ts.toDate) return ts.toDate(); const d = new Date(ts); return isNaN(d) ? null : d; }
 const TM = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
@@ -248,7 +281,9 @@ function renderLogin(msg) {
       <div id="login-body"></div>
     </div>
     <div class="center small muted" style="margin-top:12px">ผล 0 · ร · มส · มผ — ยื่นคำร้อง ติดตามสถานะ และส่งงานออนไลน์</div>
+    <div class="center" style="margin-top:12px">${installBtn()}</div>
   </div></div>`;
+  refreshInstall();
   const tabs = { stu: $('#t-stu'), staff: $('#t-staff') };
   const show = which => { tabs.stu.classList.toggle('on', which === 'stu'); tabs.staff.classList.toggle('on', which === 'staff'); which === 'stu' ? stuLoginForm() : staffLoginForm(); };
   tabs.stu.onclick = () => show('stu'); tabs.staff.onclick = () => show('staff');
@@ -434,6 +469,7 @@ function renderShell() {
     <aside class="side" id="side">
       <div class="brand"><div class="logo">✎</div><div>แก้ไขผลการเรียน<small>${esc(S.settings.school_name)}</small></div></div>
       <nav class="nav" id="nav"></nav>
+      <div style="padding:14px 6px 0">${installBtn('block')}</div>
     </aside>
     <main class="main">
       <div class="top">
@@ -451,7 +487,7 @@ function renderShell() {
   $('#logout').onclick = async () => { if (await confirmDlg('ออกจากระบบ', 'ต้องการออกจากระบบใช่ไหม', 'ออกจากระบบ')) { location.hash = ''; F.signOut(auth); } };
   $('#menu-btn').onclick = () => $('#side').classList.toggle('open');
   const gs = $('#go-semail'); if (gs) gs.onclick = e => { e.preventDefault(); go('semail'); };
-  renderNav();
+  renderNav(); refreshInstall();
   renderView();
 }
 

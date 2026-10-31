@@ -1,0 +1,20 @@
+{
+  "name": "ระบบยื่นคำร้องแก้ไขผลการเรียน",
+  "short_name": "แก้ผลการเรียน",
+  "description": "ยื่นคำร้องแก้ไขผลการเรียน 0 ร มส มผ ติดตามสถานะ และส่งงานออนไลน์",
+  "id": "/",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "lang": "th",
+  "dir": "ltr",
+  "background_color": "#f5f7fb",
+  "theme_color": "#4f46e5",
+  "categories": ["education", "productivity"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
