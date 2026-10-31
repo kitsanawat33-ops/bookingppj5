@@ -170,7 +170,8 @@ service cloud.firestore {
       return d.signs.diff(o.signs).affectedKeys().hasOnly(steps) && !d.signs.keys().hasAny(steps);
     }
 
-    // การเปลี่ยนสถานะคำร้อง: คำนวณบทบาทครั้งเดียว แล้วแยกตามสถานะปัจจุบัน
+    // การเปลี่ยนสถานะคำร้อง (ฉบับย่อ 3 ขั้น): นักเรียนยื่น+แนบหลักฐาน → งานวัดผล → วิชาการอนุมัติ
+    // คำนวณบทบาทครั้งเดียว แล้วแยกตามสถานะปัจจุบัน (กันชนเพดาน 1,000 นิพจน์)
     function reqUpdate(rid) {
       let d = request.resource.data;
       let o = resource.data;
@@ -180,60 +181,34 @@ service cloud.firestore {
       let stu = isStudentEmail() && isStudent();
       let si = stu ? { 'ok': false, 'roles': [] } : staffInfo();
       let rs = si.roles;
-      let teach = si.ok && o.teacher_email != '' && o.teacher_email == email();
-      let w = ['ASSIGNED', 'REVISE', 'WORK_SUBMITTED', 'RETURNED'];
       return d.updated_at == request.time && (
-        // นักเรียน
+        // นักเรียน: แนบหลักฐานเพิ่ม / ส่งตรวจอีกครั้ง / ยกเลิก
         (stu && o.student_id == mySid() && (
-            (st == 'SUBMITTED' && ns == 'CANCELLED' && ks.hasOnly(['status', 'updated_at']))
-            || (st in ['ASSIGNED', 'REVISE', 'WORK_SUBMITTED'] && ns == 'WORK_SUBMITTED'
-                && ks.hasOnly(['status', 'work_note', 'files_count', 'updated_at']))))
-        // ครูผู้สอน
-        || (teach && (
-            (st == 'SUBMITTED' && ns == 'ASSIGNED' && ks.hasOnly(['status', 'assignment', 'due_date', 'updated_at']))
-            || (st == 'SUBMITTED' && ns == 'REJECTED' && ks.hasOnly(['status', 'teacher_comment', 'updated_at']))
-            || (st in w && ns == st && ks.hasOnly(['assignment', 'due_date', 'files_count', 'updated_at']))
-            || (st in w && ns == 'REVISE' && ks.hasOnly(['status', 'teacher_comment', 'updated_at']))
-            || (st in w && ns == 'TEACHER_APPROVED'
-                && ks.hasOnly(['status', 'new_grade', 'teacher_comment', 'signs', 'updated_at'])
-                && d.new_grade in settings().allowed[o.original_grade]
-                && signedBy(d, o, 'teacher'))
-            || (st in w && ns == 'FAILED' && ks.hasOnly(['status', 'teacher_comment', 'signs', 'updated_at'])
-                && signedBy(d, o, 'teacher'))))
-        // หัวหน้างานวัดผล
-        || ('measure' in rs && st == 'TEACHER_APPROVED' && ks.hasOnly(['status', 'measure_comment', 'signs', 'updated_at'])
-            && ((ns == 'MEASURE_APPROVED' && signedBy(d, o, 'measure'))
-                || (ns == 'RETURNED' && voidedOnly(d, o, ['teacher']))))
-        // หัวหน้าวิชาการ
-        || ('academic' in rs && st == 'MEASURE_APPROVED' && ks.hasOnly(['status', 'academic_comment', 'signs', 'updated_at'])
-            && ((ns == 'ACADEMIC_APPROVED' && signedBy(d, o, 'academic'))
-                || (ns == 'TEACHER_APPROVED' && voidedOnly(d, o, ['measure']))
-                || (ns == 'RETURNED' && voidedOnly(d, o, ['teacher', 'measure']))))
-        || ('academic' in rs && st == 'ACADEMIC_APPROVED' && ns == 'IN_MEMO'
-            && ks.hasOnly(['status', 'memo_id', 'memo_no', 'updated_at'])
-            && memoItemOk(rid, getAfter(p('memos/' + d.memo_id)).data, o))
-        // ผู้อำนวยการ (เปลี่ยนพร้อมบันทึกข้อความใน batch เดียวกัน)
-        || ('director' in rs && st == 'IN_MEMO'
-            && ks.hasOnly(['status', 'director_comment', 'memo_id', 'memo_no', 'updated_at'])
-            && directorOk(ns, getAfter(p('memos/' + o.memo_id)).data.status))
-        // ผู้ดูแล/งานวัดผล กำหนดครูผู้สอน
-        || (rs.hasAny(['admin', 'measure']) && st in ['SUBMITTED', 'ASSIGNED', 'REVISE', 'WORK_SUBMITTED', 'RETURNED']
+            (st in ['SUBMITTED', 'REVISE'] && ns == 'CANCELLED' && ks.hasOnly(['status', 'updated_at']))
+            || (st == 'SUBMITTED' && ns == 'SUBMITTED' && ks.hasOnly(['work_note', 'files_count', 'updated_at']))
+            || (st == 'REVISE' && ns == 'SUBMITTED' && ks.hasOnly(['status', 'work_note', 'files_count', 'updated_at']))))
+        // หัวหน้างานวัดผล: ตรวจหลักฐาน + กำหนดผลใหม่ (ลงนาม) / ส่งกลับนักเรียน / ไม่อนุมัติ
+        || ('measure' in rs && st == 'SUBMITTED' && (
+            (ns == 'MEASURE_APPROVED' && ks.hasOnly(['status', 'new_grade', 'measure_comment', 'signs', 'updated_at'])
+                && d.new_grade in settings().allowed[o.original_grade] && signedBy(d, o, 'measure'))
+            || (ns in ['REVISE', 'REJECTED'] && ks.hasOnly(['status', 'measure_comment', 'updated_at']))))
+        // หัวหน้าวิชาการ: อนุมัติ (ลงนาม) / ส่งกลับงานวัดผลหรือนักเรียน / ไม่อนุมัติ
+        || ('academic' in rs && st == 'MEASURE_APPROVED' && (
+            (ns == 'COMPLETED' && ks.hasOnly(['status', 'academic_comment', 'signs', 'updated_at']) && signedBy(d, o, 'academic'))
+            || (ns in ['SUBMITTED', 'REVISE'] && ks.hasOnly(['status', 'academic_comment', 'signs', 'updated_at'])
+                && voidedOnly(d, o, ['measure']))
+            || (ns == 'REJECTED' && ks.hasOnly(['status', 'academic_comment', 'updated_at']))))
+        // ผู้ดูแล/งานวัดผล กำหนดครูผู้สอน (ข้อมูลประกอบ)
+        || (rs.hasAny(['admin', 'measure']) && st in ['SUBMITTED', 'REVISE', 'MEASURE_APPROVED']
             && ks.hasOnly(['teacher_email', 'teacher_name', 'updated_at'])
             && exists(p('staff/' + d.teacher_email)))
       );
     }
-    function memoItemOk(rid, m, o) {
-      return rid in m.request_ids && m.status == 'PENDING'
-        && m.items[rid].new_grade == o.new_grade
-        && m.items[rid].grade_key == o.grade_key
-        && m.items[rid].original_grade == o.original_grade
-        && m.items[rid].student_id == o.student_id
-        && m.items[rid]['class'] == o['class'];
-    }
-    function directorOk(ns, ms) {
-      return (ns == 'COMPLETED' && ms == 'APPROVED')
-        || (ns == 'REJECTED' && ms == 'REJECTED')
-        || (ns == 'ACADEMIC_APPROVED' && ms == 'RETURNED');
+    function fixOk(gk, r) {
+      let f = request.resource.data;
+      return r.status == 'COMPLETED' && r.grade_key == gk && f.grade_key == gk
+        && f.new_grade == r.new_grade && f.original_grade == r.original_grade
+        && f.student_id == r.student_id && f['class'] == r['class'];
     }
 
     match /requests/{rid} {
@@ -262,13 +237,9 @@ service cloud.firestore {
     // ---------- ผลการเรียนที่ ผอ. อนุมัติแก้ไขแล้ว (เขียนพร้อม ผอ. อนุมัติบันทึก) ----------
     match /fixes/{gk} {
       allow read: if isStaff() || (isStudent() && resource.data.student_id == mySid());
-      allow create, update: if hasRole('director')
-        && getAfter(p('memos/' + request.resource.data.memo_id)).data.status == 'APPROVED'
-        && getAfter(p('memos/' + request.resource.data.memo_id)).data.items[request.resource.data.request_id].grade_key == gk
-        && getAfter(p('memos/' + request.resource.data.memo_id)).data.items[request.resource.data.request_id].new_grade == request.resource.data.new_grade
-        && getAfter(p('memos/' + request.resource.data.memo_id)).data.items[request.resource.data.request_id].original_grade == request.resource.data.original_grade
-        && getAfter(p('memos/' + request.resource.data.memo_id)).data.items[request.resource.data.request_id].student_id == request.resource.data.student_id
-        && getAfter(p('memos/' + request.resource.data.memo_id)).data.items[request.resource.data.request_id]['class'] == request.resource.data['class'];
+      // เขียนได้เฉพาะหัวหน้าวิชาการ พร้อมกับการอนุมัติคำร้องในชุดเดียวกัน และค่าต้องตรงกับคำร้อง
+      allow create, update: if hasRole('academic')
+        && fixOk(gk, getAfter(p('requests/' + request.resource.data.request_id)).data);
       allow delete: if false;
     }
 

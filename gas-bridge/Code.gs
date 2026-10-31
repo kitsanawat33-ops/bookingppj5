@@ -35,25 +35,26 @@ function doGet() {
   return ContentService.createTextOutput('OK — ตัวเชื่อม Google Drive พร้อมใช้งาน');
 }
 
+// นักเรียนอัปโหลดหลักฐาน (ใบแก้ 0/ร) ครั้งเดียว ใช้ร่วมกันได้หลายคำร้อง (request_ids)
 function upload_(b, token, email) {
-  const rid = String(b.request_id || '');
-  const req = fsGet_('requests/' + encodeURIComponent(rid), token); // ตรวจสิทธิ์ผ่าน Security Rules
-  const f = fields_(req);
-  const isStudent = email.endsWith('@' + STUDENT_EMAIL_DOMAIN);
-  if (isStudent) {
-    const sid = email.split('@')[0].split('.')[0];
+  const ids = (Array.isArray(b.request_ids) && b.request_ids.length ? b.request_ids : [b.request_id]).map(String).slice(0, 30);
+  if (!ids[0]) throw new Error('ไม่พบเลขคำร้อง');
+  if (!email.endsWith('@' + STUDENT_EMAIL_DOMAIN)) throw new Error('เฉพาะนักเรียนเจ้าของคำร้องแนบหลักฐานได้');
+  const sid = email.split('@')[0].split('.')[0];
+  let first = null;
+  ids.forEach(rid => {
+    const f = fields_(fsGet_('requests/' + encodeURIComponent(rid), token)); // ตรวจสิทธิ์ผ่าน Security Rules
     if (f.student_id !== sid) throw new Error('ไม่ใช่คำร้องของคุณ');
-    if (['ASSIGNED', 'REVISE', 'WORK_SUBMITTED'].indexOf(f.status) < 0) throw new Error('ยังส่งงานไม่ได้ในขั้นตอนนี้');
-  } else {
-    if (f.teacher_email !== email) throw new Error('เฉพาะครูผู้สอนของคำร้องนี้');
-    if (['ASSIGNED', 'REVISE', 'WORK_SUBMITTED', 'RETURNED'].indexOf(f.status) < 0) throw new Error('แนบไฟล์ไม่ได้ในขั้นตอนนี้');
-  }
+    if (['SUBMITTED', 'REVISE'].indexOf(f.status) < 0) throw new Error('แนบหลักฐานไม่ได้ในขั้นตอนนี้');
+    if (!first) first = f;
+  });
   const bytes = Utilities.base64Decode(String(b.data || ''));
   if (bytes.length > MAX_MB * 1024 * 1024) throw new Error('ไฟล์ใหญ่เกิน ' + MAX_MB + ' MB');
   const name = String(b.name || 'file').replace(/[\\/:*?"<>|]/g, '_').slice(0, 150);
-  const folder = sub_(sub_(root_(), f.academic_year + '-' + f.semester), rid);
+  const folder = sub_(sub_(root_(), first.academic_year + '-' + first.semester), ids[0]);
   const file = folder.createFile(Utilities.newBlob(bytes, b.mime || 'application/octet-stream', name));
-  file.setDescription('คำร้อง ' + rid + ' อัปโหลดโดย ' + email);
+  // บรรทัดแรกของคำอธิบาย = รายการคำร้องที่ใช้ไฟล์นี้ร่วมกัน (ใช้ตรวจตอนเปิดไฟล์)
+  file.setDescription('rids:' + ids.join(',') + '\nอัปโหลดโดย ' + email);
   return { drive_id: file.getId(), size: bytes.length };
 }
 
@@ -62,11 +63,13 @@ function download_(b, token) {
   const meta = fsGet_('requests/' + encodeURIComponent(rid) + '/files/' + encodeURIComponent(fid), token);
   const id = fields_(meta).drive_id;
   const file = DriveApp.getFileById(id);
-  // กันการอ้างไฟล์ของคำร้องอื่น: ไฟล์ต้องอยู่ในโฟลเดอร์ชื่อเลขคำร้องนี้
+  // กันการอ้างไฟล์ของคำร้องอื่น: ไฟล์ต้องอยู่ในโฟลเดอร์ของคำร้องนี้ หรือระบุคำร้องนี้ไว้ในคำอธิบาย
+  let ok = false;
   const parents = file.getParents();
-  let okFolder = false;
-  while (parents.hasNext()) if (parents.next().getName() === rid) okFolder = true;
-  if (!okFolder) throw new Error('ไฟล์ไม่ตรงกับคำร้อง');
+  while (parents.hasNext()) if (parents.next().getName() === rid) ok = true;
+  const line = String(file.getDescription() || '').split('\n')[0];
+  if (!ok && line.indexOf('rids:') === 0 && line.slice(5).split(',').indexOf(rid) >= 0) ok = true;
+  if (!ok) throw new Error('ไฟล์ไม่ตรงกับคำร้อง');
   const blob = file.getBlob();
   return { name: file.getName(), mime: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
 }
@@ -77,13 +80,13 @@ const APP_URL = 'https://ppj-grade-fix.web.app';
 const SCHOOL_NAME = 'โรงเรียนบ้านโพนแพง เจียรวนนท์อุทิศ 5';
 function notify_(b, token) {
   const ev = String(b.event || '');
-  const need = { submitted: 'SUBMITTED', approved: 'COMPLETED' }[ev];
+  const need = { submitted: 'SUBMITTED', approved: 'COMPLETED', returned: 'REVISE', rejected: 'REJECTED' }[ev];
   if (!need) throw new Error('ไม่รู้จักเหตุการณ์');
   const props = PropertiesService.getScriptProperties();
   let sent = 0;
   (b.request_ids || []).slice(0, 60).forEach(rid => {
     rid = String(rid);
-    const key = 'mail_' + ev + '_' + rid;
+    let key = 'mail_' + ev + '_' + rid;
     if (props.getProperty(key)) return;
     const f = fields_(fsGet_('requests/' + encodeURIComponent(rid), token));
     if (f.status !== need) return;
@@ -91,14 +94,19 @@ function notify_(b, token) {
     try { to = fields_(fsGet_('students/' + encodeURIComponent(f.student_id), token)).email || ''; } catch (e) { return; }
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return;
     if (MailApp.getRemainingDailyQuota() < 1) throw new Error('โควตาส่งอีเมลวันนี้หมดแล้ว');
-    const subj = ev === 'submitted'
-      ? 'ได้รับคำร้องแก้ไขผลการเรียน ' + f.subject_code + ' แล้ว (' + f.request_no + ')'
-      : 'คำร้องแก้ไขผลการเรียน ' + f.subject_code + ' ได้รับการอนุมัติแล้ว';
-    const lines = ev === 'submitted'
-      ? ['ระบบได้รับคำร้องแก้ไขผลการเรียนของคุณแล้ว และส่งถึงครูผู้สอนเรียบร้อย',
-         'กรุณาติดตามงานที่ครูมอบหมายในระบบ']
-      : ['ผู้อำนวยการอนุมัติการแก้ไขผลการเรียนของคุณแล้ว',
-         'ผลการเรียนใหม่: <b>' + f.original_grade + ' → ' + f.new_grade + '</b>' + (f.memo_no ? ' (บันทึกข้อความที่ ' + f.memo_no + ')' : '')];
+    if (ev === 'returned') { key += '_' + String(f.updated_at || ''); if (props.getProperty(key)) return; }  // ส่งกลับได้หลายรอบ
+    const T = {
+      submitted: ['ได้รับคำร้องแก้ไขผลการเรียน ' + f.subject_code + ' แล้ว (' + f.request_no + ')',
+        ['ระบบได้รับคำร้องและหลักฐานของคุณแล้ว', 'งานวัดผลจะตรวจหลักฐาน แล้วเสนอฝ่ายวิชาการอนุมัติ']],
+      returned: ['กรุณาแนบหลักฐานใหม่ — คำร้องแก้ไขผลการเรียน ' + f.subject_code,
+        ['คำร้องของคุณถูกส่งกลับให้แนบหลักฐานใหม่', 'เหตุผล: ' + esc_(f.academic_comment || f.measure_comment || '-'),
+         'เข้าสู่ระบบ → คำร้องของฉัน → แนบหลักฐานใหม่และส่งตรวจอีกครั้ง']],
+      rejected: ['คำร้องแก้ไขผลการเรียน ' + f.subject_code + ' ไม่ได้รับการอนุมัติ',
+        ['คำร้องของคุณไม่ได้รับการอนุมัติ', 'เหตุผล: ' + esc_(f.academic_comment || f.measure_comment || '-'), 'สอบถามเพิ่มเติมได้ที่งานวัดผล']],
+      approved: ['คำร้องแก้ไขผลการเรียน ' + f.subject_code + ' ได้รับการอนุมัติแล้ว',
+        ['ฝ่ายวิชาการอนุมัติการแก้ไขผลการเรียนของคุณแล้ว', 'ผลการเรียนใหม่: <b>' + esc_(f.original_grade) + ' → ' + esc_(f.new_grade) + '</b>']]
+    }[ev];
+    const subj = T[0], lines = T[1];
     const html = '<div style="font-family:Tahoma,sans-serif;font-size:14px;line-height:1.6">' +
       '<p>เรียน ' + esc_(f.student_name) + ' (' + esc_(f.student_id) + ')</p>' +
       lines.map(l => '<p>' + l + '</p>').join('') +
@@ -130,7 +138,7 @@ function fsGet_(path, token) {
 function fields_(doc) {
   const o = {};
   const f = doc.fields || {};
-  Object.keys(f).forEach(k => { const v = f[k]; o[k] = v.stringValue !== undefined ? v.stringValue : (v.integerValue !== undefined ? v.integerValue : ''); });
+  Object.keys(f).forEach(k => { const v = f[k]; o[k] = v.stringValue !== undefined ? v.stringValue : (v.integerValue !== undefined ? v.integerValue : (v.timestampValue !== undefined ? v.timestampValue : '')); });
   return o;
 }
 function jwtPayload_(t) {
