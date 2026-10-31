@@ -1,0 +1,245 @@
+rules_version = '2';
+
+// =====================================================================
+// ระบบยื่นคำร้องแก้ไขผลการเรียน — Firestore Security Rules
+// กฎเหล่านี้คือ "ผู้ตรวจสอบ" ฝั่งเซิร์ฟเวอร์: ทุกการเปลี่ยนสถานะต้องทำโดยบทบาทที่ถูกต้อง
+// ในขั้นที่ถูกต้อง และแก้ได้เฉพาะช่องที่กำหนดเท่านั้น
+//
+// ⚠️ ก่อน deploy แก้ 2 ค่าให้ตรงกับ public/config.js
+//    1) อีเมลผู้ดูแลระบบคนแรก (bootstrapEmail)
+//    2) โดเมนอีเมลจำลองของนักเรียน (studentEmailRegex)
+// =====================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function bootstrapEmail() { return 'kitsanawat33@gmail.com'; }
+    function studentEmailRegex() { return '^[0-9a-z]+([.]v[0-9]+)?@stu[.]ppj[.]ac[.]th$'; }
+
+    // ---------- พื้นฐาน ----------
+    function p(rel) { return path('/databases/' + database + '/documents/' + rel); }
+    function signedIn() { return request.auth != null; }
+    function email() { return request.auth.token.get('email', '').lower(); }
+    function settings() { return get(p('config/settings')).data; }
+
+    // ---------- บุคลากร (เข้าระบบด้วย Google — อีเมลต้องยืนยันแล้ว) ----------
+    function verified() { return signedIn() && request.auth.token.get('email_verified', false) == true; }
+    function isBootstrap() { return verified() && email() == bootstrapEmail(); }
+    function staffPath() { return p('staff/' + email()); }
+    function hasStaffDoc() { return verified() && exists(staffPath()); }
+    function isStaff() { return isBootstrap() || (hasStaffDoc() && get(staffPath()).data.active == true); }
+    function hasRole(r) {
+      return (r == 'admin' && isBootstrap())
+        || (hasStaffDoc() && get(staffPath()).data.active == true && r in get(staffPath()).data.roles);
+    }
+    function oversight() { return hasRole('measure') || hasRole('academic') || hasRole('director') || hasRole('admin'); }
+    function dataAdmin() { return hasRole('admin') || hasRole('measure'); }
+
+    // ---------- นักเรียน (เลขประจำตัว + รหัสผ่าน ผ่านอีเมลจำลอง) ----------
+    function isStudentEmail() { return signedIn() && email().matches(studentEmailRegex()); }
+    function stuLocal() { return email().split('@')[0]; }
+    function mySid() { return stuLocal().split('[.]')[0]; }
+    function isStudent() {
+      return isStudentEmail()
+        && exists(p('student_links/' + mySid()))
+        && get(p('student_links/' + mySid())).data.uid == request.auth.uid;
+    }
+
+    // ---------- ตั้งค่า ----------
+    match /config/settings {
+      allow read: if true;                 // หน้าเข้าสู่ระบบต้องแสดงชื่อโรงเรียน
+      allow write: if hasRole('admin');
+    }
+    match /config/meta {                // รายชื่อชั้น/ห้อง (สร้างตอนนำเข้า)
+      allow read: if isStaff();
+      allow write: if dataAdmin();
+    }
+    match /config/counters {
+      allow read: if isStaff();
+      allow create, update: if hasRole('academic') || hasRole('admin');
+    }
+
+    // ---------- บุคลากรและลายเซ็น ----------
+    match /staff/{em} {
+      allow read: if isStaff() || (verified() && em == email());
+      allow write: if hasRole('admin');
+    }
+    match /signatures/{em} {
+      allow read: if isStaff();
+      allow write: if isStaff() && em == email()
+        && request.resource.data.keys().hasOnly(['png', 'updated_at'])
+        && request.resource.data.png is string && request.resource.data.png.size() < 400000;
+    }
+
+    // ---------- นักเรียน ----------
+    match /students/{sid} {
+      allow read: if isStaff() || (isStudent() && sid == mySid());
+      allow write: if dataAdmin();
+    }
+    match /student_ver/{sid} {          // เลขรุ่นบัญชี (เปลี่ยนเมื่อรีเซ็ตรหัส) — ต้องอ่านได้ก่อนล็อกอิน
+      allow read: if true;
+      allow write: if dataAdmin();
+    }
+    match /student_secrets/{sid} {      // รหัสเริ่มต้น (สำหรับพิมพ์แจก) — นักเรียนอ่านไม่ได้
+      allow read, write: if dataAdmin();
+    }
+    match /student_links/{sid} {        // ผูกบัญชี Firebase กับเลขประจำตัว (เปิดใช้งานครั้งแรก)
+      allow read: if isStaff() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow create: if isStudentEmail() && mySid() == sid
+        && request.resource.data.keys().hasOnly(['uid', 'h', 'at'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.h == get(p('student_secrets/' + sid)).data.h
+        && stuLocal() == (get(p('student_secrets/' + sid)).data.v == 0
+              ? sid : sid + '.v' + string(get(p('student_secrets/' + sid)).data.v));
+      allow delete: if dataAdmin();
+    }
+
+    // ---------- ผลการเรียน (1 เอกสาร = นักเรียน 1 คน 1 ภาคเรียน) ----------
+    match /terms/{tid} {
+      allow read: if isStaff() || (isStudent() && resource.data.student_id == mySid());
+      allow write: if dataAdmin();
+    }
+    match /courses/{cid} {
+      allow read: if signedIn();
+      allow write: if dataAdmin();
+    }
+
+    // ---------- คำร้อง ----------
+    function isParty(d) {
+      return (isStudent() && d.student_id == mySid())
+        || (isStaff() && (d.teacher_email == email() || oversight()));
+    }
+
+    function validCreate(rid) {
+      let d = request.resource.data;
+      let term = get(p('terms/' + d.term_id)).data;
+      let sub = term.subjects[d.subject_code];
+      return isStudent()
+        && d.student_id == mySid() && term.student_id == mySid()
+        && d.term_id == d.student_id + '_' + d.academic_year + '_' + d.semester
+        && term.academic_year == d.academic_year && term.semester == d.semester
+        && d.grade_key == d.academic_year + '_' + d.semester + '_' + d.student_id + '_' + d.subject_code
+        && rid == d.grade_key + '_' + string(d.seq)
+        && d.seq is int && d.seq >= 1 && d.seq <= 10
+        && (d.seq == 1 || get(p('requests/' + d.grade_key + '_' + string(d.seq - 1))).data.status
+              in ['FAILED', 'REJECTED', 'CANCELLED'])
+        && d.original_grade == sub.grade
+        && d.original_grade in settings().fail_grades
+        && d.status == 'SUBMITTED'
+        && d.signs == {}
+        && d.new_grade == '' && d.memo_id == ''
+        && d.created_at == request.time && d.updated_at == request.time
+        && (d.teacher_email == ''
+            || d.teacher_email == sub.get('teacher_email', '')
+            || (d.course_id != '' && get(p('courses/' + d.course_id)).data.teacher_email == d.teacher_email
+                && get(p('courses/' + d.course_id)).data.subject_code == d.subject_code
+                && get(p('courses/' + d.course_id)).data.academic_year == d.academic_year
+                && get(p('courses/' + d.course_id)).data.semester == d.semester
+                && get(p('courses/' + d.course_id)).data['class'] == term['class']))
+        && d.keys().hasOnly(['request_no', 'grade_key', 'term_id', 'course_id', 'seq', 'academic_year', 'semester',
+            'student_id', 'student_name', 'class', 'subject_code', 'subject_name', 'credit', 'original_grade',
+            'request_type', 'reason', 'teacher_email', 'teacher_name', 'status', 'assignment', 'due_date',
+            'new_grade', 'teacher_comment', 'measure_comment', 'academic_comment', 'director_comment',
+            'memo_id', 'memo_no', 'work_note', 'files_count', 'signs', 'created_at', 'updated_at']);
+    }
+
+    function chg(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
+    function stamped() { return request.resource.data.updated_at == request.time; }
+    function from(list) { return resource.data.status in list; }
+    function to(s) { return request.resource.data.status == s; }
+    function working() { return ['ASSIGNED', 'REVISE', 'WORK_SUBMITTED', 'RETURNED']; }
+    function own() { return isStudent() && resource.data.student_id == mySid(); }
+    function isT() { return isStaff() && resource.data.teacher_email != '' && resource.data.teacher_email == email(); }
+    function signsDiff() { return request.resource.data.signs.diff(resource.data.signs).affectedKeys(); }
+    function signed(step) {
+      return signsDiff().hasOnly([step]) && request.resource.data.signs[step].email == email()
+        && request.resource.data.signs[step].at == request.time;
+    }
+    function voided(steps) { return signsDiff().hasOnly(steps) && !request.resource.data.signs.keys().hasAny(steps); }
+    function memoAfter() { return getAfter(p('memos/' + request.resource.data.memo_id)).data; }
+    function memoBefore() { return getAfter(p('memos/' + resource.data.memo_id)).data; }
+
+    match /requests/{rid} {
+      allow read: if isParty(resource.data);
+      allow create: if validCreate(rid);
+      allow update: if stamped() && (
+        // นักเรียน
+        (own() && from(['SUBMITTED']) && to('CANCELLED') && chg(['status', 'updated_at']))
+        || (own() && from(['ASSIGNED', 'REVISE', 'WORK_SUBMITTED']) && to('WORK_SUBMITTED')
+            && chg(['status', 'work_note', 'files_count', 'updated_at']))
+        // ครูผู้สอน
+        || (isT() && from(['SUBMITTED']) && to('ASSIGNED') && chg(['status', 'assignment', 'due_date', 'updated_at']))
+        || (isT() && from(working()) && request.resource.data.status == resource.data.status
+            && chg(['assignment', 'due_date', 'files_count', 'updated_at']))
+        || (isT() && from(['SUBMITTED']) && to('REJECTED') && chg(['status', 'teacher_comment', 'updated_at']))
+        || (isT() && from(working()) && to('TEACHER_APPROVED')
+            && chg(['status', 'new_grade', 'teacher_comment', 'signs', 'updated_at'])
+            && request.resource.data.new_grade in settings().allowed[resource.data.original_grade]
+            && signed('teacher'))
+        || (isT() && from(working()) && to('REVISE') && chg(['status', 'teacher_comment', 'updated_at']))
+        || (isT() && from(working()) && to('FAILED') && chg(['status', 'teacher_comment', 'signs', 'updated_at'])
+            && signed('teacher'))
+        // หัวหน้างานวัดผล
+        || (hasRole('measure') && from(['TEACHER_APPROVED']) && to('MEASURE_APPROVED')
+            && chg(['status', 'measure_comment', 'signs', 'updated_at']) && signed('measure'))
+        || (hasRole('measure') && from(['TEACHER_APPROVED']) && to('RETURNED')
+            && chg(['status', 'measure_comment', 'signs', 'updated_at']) && voided(['teacher']))
+        // หัวหน้าวิชาการ
+        || (hasRole('academic') && from(['MEASURE_APPROVED']) && to('ACADEMIC_APPROVED')
+            && chg(['status', 'academic_comment', 'signs', 'updated_at']) && signed('academic'))
+        || (hasRole('academic') && from(['MEASURE_APPROVED']) && to('TEACHER_APPROVED')
+            && chg(['status', 'academic_comment', 'signs', 'updated_at']) && voided(['measure']))
+        || (hasRole('academic') && from(['MEASURE_APPROVED']) && to('RETURNED')
+            && chg(['status', 'academic_comment', 'signs', 'updated_at']) && voided(['teacher', 'measure']))
+        || (hasRole('academic') && from(['ACADEMIC_APPROVED']) && to('IN_MEMO')
+            && chg(['status', 'memo_id', 'memo_no', 'updated_at'])
+            && rid in memoAfter().request_ids && memoAfter().status == 'PENDING')
+        // ผู้อำนวยการ (เปลี่ยนพร้อมบันทึกข้อความใน batch เดียวกัน)
+        || (hasRole('director') && from(['IN_MEMO'])
+            && chg(['status', 'director_comment', 'memo_id', 'memo_no', 'updated_at'])
+            && ((to('COMPLETED') && memoBefore().status == 'APPROVED')
+                || (to('REJECTED') && memoBefore().status == 'REJECTED')
+                || (to('ACADEMIC_APPROVED') && memoBefore().status == 'RETURNED')))
+        // ผู้ดูแล/งานวัดผล กำหนดครูผู้สอน
+        || (dataAdmin() && from(['SUBMITTED', 'ASSIGNED', 'REVISE', 'WORK_SUBMITTED', 'RETURNED'])
+            && chg(['teacher_email', 'teacher_name', 'updated_at'])
+            && exists(p('staff/' + request.resource.data.teacher_email)))
+      );
+      allow delete: if false;
+
+      // ประวัติการดำเนินการ (เพิ่มได้อย่างเดียว ลบ/แก้ไม่ได้)
+      match /logs/{lid} {
+        // oversight() ตรวจก่อน เพื่อไม่ต้อง get คำร้องทีละฉบับ (batch ใหญ่ตอนออกบันทึก/ผอ.อนุมัติ จะไม่ชนเพดาน 20 ครั้ง)
+        allow read: if oversight() || isParty(get(p('requests/' + rid)).data);
+        allow create: if request.resource.data.actor == email() && request.resource.data.at == request.time
+          && (oversight() || isParty(get(p('requests/' + rid)).data) || isParty(getAfter(p('requests/' + rid)).data));
+        allow update, delete: if false;
+      }
+      // รายการไฟล์แนบ (ตัวไฟล์อยู่ใน Google Drive)
+      match /files/{fid} {
+        allow read: if oversight() || isParty(get(p('requests/' + rid)).data);
+        allow create: if isParty(get(p('requests/' + rid)).data)
+          && request.resource.data.uploaded_by == email() && request.resource.data.uploaded_at == request.time;
+        allow update, delete: if false;
+      }
+    }
+
+    // ---------- บันทึกข้อความ ----------
+    match /memos/{mid} {
+      allow read: if oversight();
+      allow create: if hasRole('academic')
+        && request.resource.data.status == 'PENDING'
+        && request.resource.data.signs.academic.email == email()
+        && request.resource.data.request_ids is list && request.resource.data.request_ids.size() > 0;
+      allow update: if hasRole('director') && resource.data.status == 'PENDING'
+        && request.resource.data.status in ['APPROVED', 'REJECTED', 'RETURNED']
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'decision', 'director_comment', 'decided_at', 'signs'])
+        && request.resource.data.decided_at == request.time
+        && (request.resource.data.status == 'RETURNED'
+            || (request.resource.data.signs.director.email == email()
+                && request.resource.data.signs.diff(resource.data.signs).affectedKeys().hasOnly(['director'])));
+      allow delete: if false;
+    }
+  }
+}
