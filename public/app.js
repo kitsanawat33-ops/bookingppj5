@@ -284,7 +284,7 @@ function renderLogin(msg) {
     </div>
     <div class="center small muted" style="margin-top:12px">ผล 0 · ร · มส · มผ — ยื่นคำร้อง ติดตามสถานะ และส่งงานออนไลน์</div>
     <div class="center" style="margin-top:12px">${installBtn()}</div>
-    <div class="credit">พัฒนาโดย <b>KITSANAWAT PIXEL MATH STUDIO</b></div>
+    <div class="credit">พัฒนาโดย <b>KITSANAWAT · Pixel Math Studio</b></div>
   </div></div>`;
   refreshInstall();
   const tabs = { stu: $('#t-stu'), staff: $('#t-staff') };
@@ -464,7 +464,7 @@ function renderShell() {
       <div class="brand"><div class="logo">PPJ</div><div><span class="app-name">PPJ GRADIX</span><small>${esc(S.settings.school_name)}</small></div></div>
       <nav class="nav" id="nav"></nav>
       <div style="padding:14px 6px 0">${installBtn('block')}</div>
-      <div class="credit side-credit">พัฒนาโดย<br><b>KITSANAWAT PIXEL MATH STUDIO</b></div>
+      <div class="credit side-credit">พัฒนาโดย<br><b>KITSANAWAT · Pixel Math Studio</b></div>
     </aside>
     <div class="side-backdrop" id="side-bd"></div>
     <main class="main">
