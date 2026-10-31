@@ -78,46 +78,54 @@ function download_(b, token) {
  * ส่งได้เฉพาะเมื่อสถานะคำร้องตรงกับเหตุการณ์จริง (อ่านจาก Firestore ในนามผู้เรียก) และส่งซ้ำไม่ได้ */
 const APP_URL = 'https://ppj-grade-fix.web.app';
 const SCHOOL_NAME = 'โรงเรียนบ้านโพนแพง เจียรวนนท์อุทิศ 5';
+// 1 เลขคำร้องอาจมีหลายรายวิชา → รวมเป็นอีเมลฉบับเดียวต่อเลขคำร้อง
 function notify_(b, token) {
   const ev = String(b.event || '');
   const need = { submitted: 'SUBMITTED', approved: 'COMPLETED', returned: 'REVISE', rejected: 'REJECTED' }[ev];
   if (!need) throw new Error('ไม่รู้จักเหตุการณ์');
   const props = PropertiesService.getScriptProperties();
-  let sent = 0;
+  const groups = {};
   (b.request_ids || []).slice(0, 60).forEach(rid => {
     rid = String(rid);
-    let key = 'mail_' + ev + '_' + rid;
-    if (props.getProperty(key)) return;
     const f = fields_(fsGet_('requests/' + encodeURIComponent(rid), token));
     if (f.status !== need) return;
+    const key = 'mail_' + ev + '_' + rid + (ev === 'returned' ? '_' + String(f.updated_at || '') : '');  // ส่งกลับได้หลายรอบ
+    if (props.getProperty(key)) return;
+    const g = f.request_no || rid;
+    (groups[g] = groups[g] || []).push({ f: f, key: key });
+  });
+  let sent = 0;
+  Object.keys(groups).forEach(no => {
+    const list = groups[no], f = list[0].f;
     let to = '';
     try { to = fields_(fsGet_('students/' + encodeURIComponent(f.student_id), token)).email || ''; } catch (e) { return; }
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return;
     if (MailApp.getRemainingDailyQuota() < 1) throw new Error('โควตาส่งอีเมลวันนี้หมดแล้ว');
-    if (ev === 'returned') { key += '_' + String(f.updated_at || ''); if (props.getProperty(key)) return; }  // ส่งกลับได้หลายรอบ
+    const codes = list.map(x => x.f.subject_code).join(', ');
+    const reason = list.map(x => x.f.academic_comment || x.f.measure_comment).filter(String)[0] || '-';
     const T = {
-      submitted: ['ได้รับคำร้องแก้ไขผลการเรียน ' + f.subject_code + ' แล้ว (' + f.request_no + ')',
+      submitted: ['ได้รับคำร้องแก้ไขผลการเรียนแล้ว (' + no + ')',
         ['ระบบได้รับคำร้องและหลักฐานของคุณแล้ว', 'งานวัดผลจะตรวจหลักฐาน แล้วเสนอฝ่ายวิชาการอนุมัติ']],
-      returned: ['กรุณาแนบหลักฐานใหม่ — คำร้องแก้ไขผลการเรียน ' + f.subject_code,
-        ['คำร้องของคุณถูกส่งกลับให้แนบหลักฐานใหม่', 'เหตุผล: ' + esc_(f.academic_comment || f.measure_comment || '-'),
-         'เข้าสู่ระบบ → คำร้องของฉัน → แนบหลักฐานใหม่และส่งตรวจอีกครั้ง']],
-      rejected: ['คำร้องแก้ไขผลการเรียน ' + f.subject_code + ' ไม่ได้รับการอนุมัติ',
-        ['คำร้องของคุณไม่ได้รับการอนุมัติ', 'เหตุผล: ' + esc_(f.academic_comment || f.measure_comment || '-'), 'สอบถามเพิ่มเติมได้ที่งานวัดผล']],
-      approved: ['คำร้องแก้ไขผลการเรียน ' + f.subject_code + ' ได้รับการอนุมัติแล้ว',
-        ['ฝ่ายวิชาการอนุมัติการแก้ไขผลการเรียนของคุณแล้ว', 'ผลการเรียนใหม่: <b>' + esc_(f.original_grade) + ' → ' + esc_(f.new_grade) + '</b>']]
+      returned: ['กรุณาแนบหลักฐานใหม่ — คำร้อง ' + no,
+        ['คำร้องของคุณถูกส่งกลับให้แนบหลักฐานใหม่ (วิชา ' + esc_(codes) + ')', 'เหตุผล: ' + esc_(reason),
+         'เข้าสู่ระบบ → คำร้อง → แนบหลักฐานใหม่และส่งตรวจอีกครั้ง']],
+      rejected: ['คำร้อง ' + no + ' ไม่ได้รับการอนุมัติ (' + codes + ')',
+        ['คำร้องของคุณไม่ได้รับการอนุมัติ (วิชา ' + esc_(codes) + ')', 'เหตุผล: ' + esc_(reason), 'สอบถามเพิ่มเติมได้ที่งานวัดผล']],
+      approved: ['คำร้อง ' + no + ' ได้รับการอนุมัติแล้ว (' + codes + ')',
+        ['ฝ่ายวิชาการอนุมัติการแก้ไขผลการเรียนของคุณแล้ว']]
     }[ev];
-    const subj = T[0], lines = T[1];
+    const rows = list.map(x => '<tr><td>' + esc_(x.f.subject_code + ' ' + x.f.subject_name) + '</td><td>' + esc_(x.f.semester + '/' + x.f.academic_year) + '</td><td>' +
+      esc_(x.f.original_grade) + (ev === 'approved' ? ' → <b>' + esc_(x.f.new_grade) + '</b>' : '') + '</td></tr>').join('');
     const html = '<div style="font-family:Tahoma,sans-serif;font-size:14px;line-height:1.6">' +
       '<p>เรียน ' + esc_(f.student_name) + ' (' + esc_(f.student_id) + ')</p>' +
-      lines.map(l => '<p>' + l + '</p>').join('') +
-      '<table style="border-collapse:collapse" cellpadding="4">' +
-      '<tr><td>เลขคำร้อง</td><td><b>' + esc_(f.request_no) + '</b></td></tr>' +
-      '<tr><td>รายวิชา</td><td>' + esc_(f.subject_code + ' ' + f.subject_name) + '</td></tr>' +
-      '<tr><td>ภาคเรียน</td><td>' + esc_(f.semester + '/' + f.academic_year) + '</td></tr></table>' +
+      T[1].map(l => '<p>' + l + '</p>').join('') +
+      '<p>เลขคำร้อง <b>' + esc_(no) + '</b></p>' +
+      '<table style="border-collapse:collapse" border="1" cellpadding="6"><tr style="background:#f3f4f6"><th>รายวิชา</th><th>ภาคเรียน</th><th>ผลการเรียน</th></tr>' + rows + '</table>' +
       '<p><a href="' + APP_URL + '">เข้าสู่ระบบเพื่อดูรายละเอียด</a></p>' +
       '<p style="color:#777;font-size:12px">อีเมลนี้ส่งอัตโนมัติจากระบบยื่นคำร้องแก้ไขผลการเรียน ' + SCHOOL_NAME + ' — ไม่ต้องตอบกลับ</p></div>';
-    MailApp.sendEmail({ to: to, subject: subj, htmlBody: html, name: 'ระบบแก้ไขผลการเรียน ' + SCHOOL_NAME });
-    props.setProperty(key, new Date().toISOString());
+    MailApp.sendEmail({ to: to, subject: T[0], htmlBody: html, name: 'ระบบแก้ไขผลการเรียน ' + SCHOOL_NAME });
+    const now = new Date().toISOString();
+    list.forEach(x => props.setProperty(x.key, now));
     sent++;
   });
   return { sent: sent };

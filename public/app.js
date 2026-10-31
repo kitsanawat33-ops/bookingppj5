@@ -186,7 +186,7 @@ function modal(html, opts = {}) {
   closeModal();
   const bg = document.createElement('div');
   bg.className = 'modal-bg';
-  bg.innerHTML = `<div class="modal ${opts.lg ? 'lg' : ''}" role="dialog">${html}</div>`;
+  bg.innerHTML = `<div class="modal ${opts.lg ? 'lg' : ''} ${opts.sheet ? 'sheet' : ''}" role="dialog">${html}</div>`;
   bg.addEventListener('mousedown', e => { if (e.target === bg && !opts.sticky) closeModal(); });
   $('#modal-root').appendChild(bg);
   $$('[data-close]', bg).forEach(b => b.onclick = closeModal);
@@ -267,7 +267,7 @@ async function resolveMe(user) {
 }
 
 function renderLogin(msg) {
-  closeModal();
+  closeModal(); document.body.classList.remove('stu');
   const sn = esc(S.settings.school_name || '');
   $('#app').innerHTML = `
   <div class="login-wrap"><div class="login">
@@ -425,9 +425,9 @@ const VIEW_DEPS = { grades: ['mine'], myreq: ['mine'], measure: ['measure'], aca
 function counts() {
   const L = S.live;
   return {
-    measure: (L.measure || []).length,
-    academic: (L.academic || []).length,
-    myreq: (L.mine || []).filter(r => r.status === 'REVISE').length
+    measure: groupReqs(L.measure || []).length,
+    academic: groupReqs(L.academic || []).length,
+    myreq: groupReqs((L.mine || []).filter(r => r.status === 'REVISE')).length
   };
 }
 
@@ -475,7 +475,9 @@ function renderShell() {
       ${isStudent() && !S.me.contact ? `<div class="alert info small" style="margin-bottom:14px">✉️ ใส่อีเมลของคุณเพื่อรับแจ้งเมื่อส่งคำร้องและเมื่อคำร้องได้รับการอนุมัติ — <a href="#" id="go-semail"><b>ตั้งค่าอีเมล</b></a></div>` : ''}
       <div id="view"></div>
     </main>
+    ${isStudent() ? '<nav class="tabbar" id="tabbar"></nav>' : ''}
   </div>`;
+  document.body.classList.toggle('stu', isStudent());
   $('#logout').onclick = async () => { if (await confirmDlg('ออกจากระบบ', 'ต้องการออกจากระบบใช่ไหม', 'ออกจากระบบ')) { location.hash = ''; F.signOut(auth); } };
   $('#menu-btn').onclick = () => $('#side').classList.toggle('open');
   const gs = $('#go-semail'); if (gs) gs.onclick = e => { e.preventDefault(); go('semail'); };
@@ -490,6 +492,12 @@ function renderNav() {
     ? `<div class="sec">${esc(n.sec)}</div>`
     : `<a data-v="${n.id}" class="${S.view === n.id ? 'on' : ''}"><span class="ico">${n.ico}</span>${esc(n.label)}${n.cnt && c[n.cnt] ? `<span class="cnt">${c[n.cnt]}</span>` : ''}</a>`).join('');
   $$('a[data-v]', nav).forEach(a => a.onclick = () => go(a.dataset.v));
+  const tb = $('#tabbar');
+  if (tb) {
+    const T = [['grades', '📘', 'ผลการเรียน'], ['myreq', '📝', 'คำร้อง'], ['semail', '✉️', 'อีเมล']];
+    tb.innerHTML = T.map(([id, ico, l]) => `<a data-tv="${id}" class="${S.view === id ? 'on' : ''}"><span class="ti">${ico}${id === 'myreq' && c.myreq ? `<i>${c.myreq}</i>` : ''}</span>${l}</a>`).join('');
+    $$('a[data-tv]', tb).forEach(a => a.onclick = () => go(a.dataset.tv));
+  }
 }
 function go(v) { S.view = v; location.hash = v; $('#side') && $('#side').classList.remove('open'); renderNav(); renderView(); }
 
@@ -502,30 +510,69 @@ function renderView(isLiveRefresh) {
   Promise.resolve(fn(isLiveRefresh)).catch(e => { console.error(e); $('#view').innerHTML = `<div class="alert bad">${esc(errMsg(e))}</div>`; });
 }
 
-/* =========================== ตารางคำร้อง =========================== */
+/* =========================== คำร้อง (1 เลขคำร้อง = หลายรายวิชา) =========================== */
+// เอกสารใน Firestore ยังเป็น 1 รายวิชา/เอกสาร (เพื่อให้อนุมัติ/ส่งกลับรายวิชาได้) แต่แสดงรวมตาม request_no
+const ST_ORDER = ['REVISE', 'SUBMITTED', 'MEASURE_APPROVED', 'COMPLETED', 'REJECTED', 'CANCELLED', 'FAILED'];
+function groupStatus(items) {
+  const has = st => items.some(r => r.status === st);
+  if (has('REVISE')) return 'REVISE';
+  if (has('SUBMITTED')) return 'SUBMITTED';
+  if (has('MEASURE_APPROVED')) return 'MEASURE_APPROVED';
+  for (const st of ACTIVE) if (has(st)) return st;          // ข้อมูลรุ่นเก่า
+  if (has('COMPLETED')) return 'COMPLETED';
+  return items[0] ? items[0].status : 'SUBMITTED';
+}
+function groupReqs(rows) {
+  const m = new Map();
+  rows.forEach(r => { const k = (r.request_no || r.id) + '|' + r.student_id; if (!m.has(k)) m.set(k, []); m.get(k).push(r); });
+  return [...m.values()].map(items => {
+    items.sort((a, b) => a.subject_code.localeCompare(b.subject_code));
+    const f = items[0];
+    const upd = Math.max(...items.map(r => +(toDate(r.updated_at) || 0)));
+    return { no: f.request_no || f.id, sid: f.student_id, f, items, status: groupStatus(items), upd,
+      done: items.filter(r => r.status === 'COMPLETED').length, files: Math.max(...items.map(r => r.files_count || 0)) };
+  }).sort((a, b) => b.upd - a.upd);
+}
+function groupBadge(g) {
+  const n = g.items.length;
+  const part = n > 1 && g.done && g.done < n ? ` <span class="small muted">อนุมัติ ${g.done}/${n} วิชา</span>` : '';
+  return badge(g.status) + part;
+}
+const subjChips = g => g.items.map(r => `<span class="subj"><b>${esc(r.subject_code)}</b> ${gradeChip(r.original_grade, 'fail')}${r.new_grade ? '→' + gradeChip(r.new_grade, 'fixed') : ''}</span>`).join(' ');
+
 function reqTable(rows, opts = {}) {
-  if (!rows.length) return `<div class="empty">${opts.empty || 'ไม่มีรายการ'}</div>`;
+  const gs = groupReqs(rows);
+  if (!gs.length) return `<div class="empty">${opts.empty || 'ไม่มีรายการ'}</div>`;
   return `<div class="tbl-wrap"><table class="tbl"><thead><tr>
     ${opts.check ? '<th><input type="checkbox" id="chk-all"></th>' : ''}
-    <th>เลขคำร้อง</th>${opts.noStudent ? '' : '<th>นักเรียน</th><th>ชั้น</th>'}<th>รายวิชา</th><th>ผลเดิม</th><th>ผลใหม่</th>${opts.noTeacher ? '' : '<th>ครูผู้สอน</th>'}<th>สถานะ</th><th>อัปเดต</th>
-  </tr></thead><tbody>${rows.map(r => `
-    <tr class="click" data-rid="${esc(r.id)}">
-      ${opts.check ? `<td onclick="event.stopPropagation()"><input type="checkbox" class="chk-row" value="${esc(r.id)}"></td>` : ''}
-      <td><b>${esc(r.request_no)}</b>${r.seq > 1 ? `<div class="small muted">ครั้งที่ ${r.seq}</div>` : ''}</td>
-      ${opts.noStudent ? '' : `<td>${esc(r.student_name)}<div class="small muted">${esc(r.student_id)}</div></td><td>${esc(r.class)}</td>`}
-      <td>${esc(r.subject_code)}<div class="small muted">${esc(r.subject_name)}</div></td>
-      <td>${gradeChip(r.original_grade, 'fail')}</td><td>${r.new_grade ? gradeChip(r.new_grade, 'fixed') : '<span class="muted">–</span>'}</td>
-      ${opts.noTeacher ? '' : `<td class="small">${esc(r.teacher_name || '') || '<span class="badge b-red">ยังไม่มีครู</span>'}</td>`}
-      <td>${badge(r.status)}${opts.files ? `<div class="small ${r.files_count ? 'muted' : ''}">${r.files_count ? '📎 หลักฐาน ' + r.files_count + ' ไฟล์' : '<span class="badge b-red">ไม่มีหลักฐาน</span>'}</div>` : ''}${r.due_date && ['ASSIGNED'].includes(r.status) ? `<div class="small ${r.due_date < isoToday() ? 'muted' : 'muted'}">ส่งภายใน ${esc(fmtTs(r.due_date, false))}${r.due_date < isoToday() ? ' <span class="badge b-red">เลยกำหนด</span>' : ''}</div>` : ''}</td>
-      <td class="small muted">${esc(fmtTs(r.updated_at))}</td>
+    <th>เลขคำร้อง</th>${opts.noStudent ? '' : '<th>นักเรียน</th><th>ชั้น</th>'}<th>รายวิชา / ผลเดิม → ผลใหม่</th><th>สถานะ</th><th>อัปเดต</th>
+  </tr></thead><tbody>${gs.map(g => `
+    <tr class="click" data-gno="${esc(g.no)}" data-gsid="${esc(g.sid)}">
+      ${opts.check ? `<td onclick="event.stopPropagation()"><input type="checkbox" class="chk-row" value="${esc(g.no)}|${esc(g.sid)}"></td>` : ''}
+      <td><b>${esc(g.no)}</b><div class="small muted">${g.items.length} วิชา</div></td>
+      ${opts.noStudent ? '' : `<td>${esc(g.f.student_name)}<div class="small muted">${esc(g.sid)}</div></td><td>${esc(g.f.class)}</td>`}
+      <td class="subjs">${subjChips(g)}</td>
+      <td>${groupBadge(g)}${opts.files ? `<div class="small">${g.files ? '📎 หลักฐาน ' + g.files + ' ไฟล์' : '<span class="badge b-red">ไม่มีหลักฐาน</span>'}</div>` : ''}</td>
+      <td class="small muted">${esc(fmtTs(new Date(g.upd)))}</td>
     </tr>`).join('')}</tbody></table></div>`;
 }
 function bindReqTable(root) {
-  $$('tr[data-rid]', root).forEach(tr => tr.onclick = () => openRequest(tr.dataset.rid));
+  $$('tr[data-gno]', root).forEach(tr => tr.onclick = () => openGroup(tr.dataset.gno, tr.dataset.gsid));
   const all = $('#chk-all', root);
   if (all) all.onchange = () => $$('.chk-row', root).forEach(c => c.checked = all.checked);
 }
 const byUpdated = rows => rows.slice().sort((a, b) => (toDate(b.updated_at) || 0) - (toDate(a.updated_at) || 0));
+/** ทำรายการกับหลายรายวิชา แบ่งเป็นชุดละ 6 (เพดานการตรวจสิทธิ์ต่อชุดของ Firestore) */
+async function inChunks(items, fn, label) {
+  for (let i = 0; i < items.length; i += 6) {
+    if (items.length > 6) loading(true, `${label || 'กำลังบันทึก'} ${Math.min(i + 6, items.length)}/${items.length}`);
+    const b = F.writeBatch(db); items.slice(i, i + 6).forEach(r => fn(b, r)); await b.commit();
+  }
+}
+function actOn(b, r, patch, action, detail, role) {
+  b.update(R.req(r.id), { ...patch, updated_at: F.serverTimestamp() });
+  b.set(logRef(r.id), logData(action, detail, role));
+}
 
 /* =========================== หน้า: นักเรียน =========================== */
 const VIEWS = {};
@@ -564,77 +611,87 @@ VIEWS.grades = async (live) => {
   let cr = 0, pt = 0;
   rows.forEach(r => { const c = parseFloat(r.sub.credit); if (/^[0-4](\.5)?$/.test(r.grade) && c > 0) { cr += c; pt += c * parseFloat(r.grade); } });
   const gpa = cr ? (Math.floor(pt / cr * 100) / 100).toFixed(2) : '-';
+  const pending = allFails.filter(r => r.active);
   v.innerHTML = `
-    ${allFails.length ? `<div class="alert bad" style="margin-bottom:14px"><b>คุณมีผลการเรียนที่ต้องแก้ไข ${allFails.length} รายวิชา</b>
-      <div class="small">${allFails.map(r => `${esc(r.code)} ${esc(r.sub.name || '')} (${esc(r.grade)}) — ภาคเรียนที่ ${esc(r.t.semester)}/${esc(r.t.academic_year)}${r.active ? ' · ' + esc(ST_LABEL[r.active.status]) : ''}`).join('<br>')}</div>
-      ${eligible.length ? `<button class="btn pri" id="g-newreq" style="margin-top:10px">📎 ยื่นคำร้องแก้ไข (แนบใบแก้ 0/ร · เลือกได้หลายวิชา)</button>` : ''}</div>`
-      : `<div class="alert ok" style="margin-bottom:14px">ไม่มีผลการเรียนที่ต้องแก้ไข 🎉</div>`}
-    <div class="card">
-      <div class="row" style="justify-content:space-between;margin-bottom:10px">
-        <div class="tabs" style="margin:0">${terms.map(x => `<button class="tab ${x.id === sel ? 'on' : ''}" data-t="${esc(x.id)}">ภาคเรียนที่ ${esc(x.semester)}/${esc(x.academic_year)}</button>`).join('')}</div>
-        <div class="row small muted">เกรดเฉลี่ย (เฉพาะรายวิชาที่มีผลเป็นตัวเลข) <b style="font-size:1.1rem;color:var(--ink)">${gpa}</b>
-          <button class="btn sm" id="g-print">🖨️ พิมพ์ผลการเรียน</button></div>
-      </div>
-      <div class="small muted" style="margin-bottom:8px">${esc(S.me.name)} · เลขประจำตัว ${esc(S.me.sid)} · ชั้น ${esc(t.class || S.me.cls)}</div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>รหัสวิชา</th><th>รายวิชา</th><th>หน่วยกิต</th><th>ผลการเรียน</th><th>สถานะ/การดำเนินการ</th></tr></thead><tbody>
-      ${rows.map(r => `<tr class="${r.isFail ? 'fail' : ''}">
-        <td><b>${esc(r.code)}</b></td><td>${esc(r.sub.name || '')}<div class="small muted">${esc(r.sub.teacher_name || '')}</div></td>
-        <td>${esc(r.sub.credit || '')}</td>
-        <td>${r.completed ? `${gradeChip(r.completed.original_grade, 'fail')} → ${gradeChip(r.grade, 'fixed')}` : gradeChip(r.grade, r.isFail ? 'fail' : '')}</td>
-        <td>${r.active ? `<a href="#" data-open="${esc(r.active.id)}">${badge(r.active.status)}</a>`
-          : r.canReq ? `<button class="btn sm pri" data-req="${esc(r.gk)}">ยื่นคำร้องแก้ไข</button>${r.failed ? `<div class="small muted">เหลือสิทธิ์ ${maxAtt - r.failed} ครั้ง</div>` : ''}`
+    ${eligible.length ? `<div class="hero bad"><div class="hero-t">มีผลการเรียนที่ต้องแก้ไข ${eligible.length} วิชา</div>
+        <div class="small">${eligible.map(r => `${esc(r.code)} (${esc(r.grade)})`).join(' · ')}</div>
+        <button class="btn pri big" id="g-newreq">📷 ยื่นคำร้องแก้ไข — ถ่ายรูปใบแก้</button></div>`
+      : pending.length ? `<div class="hero info"><div class="hero-t">คำร้องกำลังดำเนินการ ${pending.length} วิชา</div><a href="#" class="small" data-go-myreq>ดูสถานะคำร้อง ›</a></div>`
+      : allFails.length ? `<div class="hero bad"><div class="hero-t">มีผลการเรียนที่ต้องแก้ไข ${allFails.length} วิชา</div><div class="small">ติดต่องานวัดผล</div></div>`
+      : `<div class="hero ok"><div class="hero-t">ไม่มีผลการเรียนที่ต้องแก้ไข 🎉</div></div>`}
+    <div class="tabs scroll-x">${terms.map(x => `<button class="tab ${x.id === sel ? 'on' : ''}" data-t="${esc(x.id)}">ภาคเรียน ${esc(x.semester)}/${esc(x.academic_year)}</button>`).join('')}</div>
+    <div class="row gpa-row"><div><div class="small muted">${esc(S.me.name)} · ${esc(S.me.sid)} · ${esc(t.class || S.me.cls)}</div>
+      <div>เกรดเฉลี่ย <b class="gpa">${gpa}</b></div></div><button class="btn sm" id="g-print">🖨️ พิมพ์</button></div>
+    <div class="gcards">${rows.map(r => `<div class="gcard ${r.isFail ? 'fail' : ''}">
+      <div class="gc-main"><div class="gc-code">${esc(r.code)} <span class="small muted">${esc(r.sub.credit || '')} นก.</span></div>
+        <div class="gc-name">${esc(r.sub.name || '')}</div>
+        ${r.active ? `<a href="#" class="small" data-open="${esc(r.active.request_no)}">${badge(r.active.status)} ›</a>`
           : r.completed ? `<span class="badge b-green">แก้ไขแล้ว</span>`
-          : r.isFail ? `<span class="small muted">ยื่นครบจำนวนครั้งแล้ว ติดต่องานวัดผล</span>` : ''}</td>
-      </tr>`).join('')}</tbody></table></div>
-    </div>`;
+          : r.canReq ? `<button class="btn sm pri" data-req="${esc(r.gk)}">ยื่นคำร้องแก้ไข</button>${r.failed ? ` <span class="small muted">เหลือสิทธิ์ ${maxAtt - r.failed} ครั้ง</span>` : ''}`
+          : r.isFail ? `<span class="small muted">ยื่นครบจำนวนครั้งแล้ว ติดต่องานวัดผล</span>` : ''}</div>
+      <div class="gc-grade">${r.completed ? `<span class="small muted"><s>${esc(r.completed.original_grade)}</s></span> ${gradeChip(r.grade, 'fixed')}` : gradeChip(r.grade, r.isFail ? 'fail' : '')}</div>
+    </div>`).join('')}</div>`;
+  const gm = $('[data-go-myreq]', v); if (gm) gm.onclick = e => { e.preventDefault(); go('myreq'); };
   $$('[data-t]', v).forEach(b => b.onclick = () => { S._termSel = b.dataset.t; VIEWS.grades(true); });
   $('#g-print', v).onclick = () => {
     const fx = {};
     mine.filter(r => r.status === 'COMPLETED').forEach(r => fx[r.grade_key] = { original_grade: r.original_grade, new_grade: r.new_grade, memo_no: r.memo_no });
     printReports([{ term: { ...t, name: t.name || S.me.name }, fixes: fx }], 'ผลการเรียน ' + S.me.sid);
   };
-  $$('[data-open]', v).forEach(a => a.onclick = e => { e.preventDefault(); openRequest(a.dataset.open); });
+  $$('[data-open]', v).forEach(a => a.onclick = e => { e.preventDefault(); openGroup(a.dataset.open, S.me.sid); });
   $$('[data-req]', v).forEach(b => b.onclick = () => newRequestDlg(eligible, b.dataset.req));
   const nb = $('#g-newreq', v); if (nb) nb.onclick = () => newRequestDlg(eligible, eligible.length === 1 ? eligible[0].gk : '');
 };
 
-/** ยื่นคำร้อง: เลือกวิชา (ได้หลายวิชา) + แนบรูป/เอกสารใบแก้ 0 ร ที่ฝ่ายวิชาการแจก → ส่งถึงงานวัดผล */
-function newRequestDlg(eligible, preselect) {
-  const m = modal(`<div class="modal-h"><h3>ยื่นคำร้องขอแก้ไขผลการเรียน</h3><button class="x" data-close>×</button></div>
-    <div class="modal-b">
-      <h4 style="margin:0 0 6px">1. เลือกรายวิชาที่ต้องการแก้</h4>
-      <div class="pick-list">${eligible.map(r => `<label class="pick"><input type="checkbox" class="nr-sub" value="${esc(r.gk)}" ${r.gk === preselect ? 'checked' : ''}>
-        <span><b>${esc(r.code)}</b> ${esc(r.sub.name || '')}<div class="small muted">ภาคเรียนที่ ${esc(r.t.semester)}/${esc(r.t.academic_year)} · ยื่นครั้งที่ ${r.failed + 1}</div></span>
-        ${gradeChip(r.grade, 'fail')}</label>`).join('')}</div>
-      <h4 style="margin:14px 0 6px">2. แนบรูปถ่ายหรือไฟล์ใบแก้ 0 / ร ที่ฝ่ายวิชาการแจก</h4>
-      <input type="file" id="nr-files" class="in" multiple accept="image/*,application/pdf">
-      <div class="small muted" style="margin-top:4px">ถ่ายให้เห็นชื่อ รายวิชา ผลการแก้ไข และลายมือชื่อครูชัดเจน · แนบได้หลายรูป · รูปจะถูกย่อขนาดอัตโนมัติ · PDF ไม่เกิน ${esc(S.settings.max_upload_mb || 10)} MB</div>
-      <div id="nr-prev" class="thumbs"></div>
-      <label class="f" style="margin-top:12px"><span>หมายเหตุถึงงานวัดผล (ถ้ามี)</span><textarea class="in" id="nr-reason" placeholder="เช่น แก้ 0 ด้วยการสอบแก้ตัวแล้ว ครูลงนามในใบแก้เรียบร้อย"></textarea></label>
-      <div class="small muted">งานวัดผลตรวจหลักฐาน → ฝ่ายวิชาการอนุมัติ → ผลการเรียนปรับให้อัตโนมัติ ติดตามได้ที่เมนู "คำร้องของฉัน"</div>
-    </div>
-    <div class="modal-f"><button class="btn" data-close>ยกเลิก</button><button class="btn pri" id="nr-ok">ส่งคำร้อง</button></div>`, { sticky: true });
-  $('#nr-files', m).onchange = e => {
-    $('#nr-prev', m).innerHTML = Array.from(e.target.files).map(f => /^image\//.test(f.type)
-      ? `<img src="${URL.createObjectURL(f)}" alt="">` : `<div class="doc">📄 ${esc(f.name)}</div>`).join('');
+/** ตัวเลือกหลักฐาน: ปุ่มถ่ายรูป (เปิดกล้องหลัง) + เลือกจากคลัง/ไฟล์ ถ่ายต่อกันได้หลายรูป ลบรูปที่พลาดได้ */
+function evidencePicker(root, files = []) {
+  root.innerHTML = `<div class="ev-btns">
+      <label class="btn pri ev-btn">📷 ถ่ายรูป<input type="file" accept="image/*" capture="environment" hidden data-ev></label>
+      <label class="btn ev-btn">🖼️ เลือกรูป / PDF<input type="file" accept="image/*,application/pdf" multiple hidden data-ev></label></div>
+    <div class="thumbs"></div><div class="small muted ev-hint">ถ่ายให้เห็นชื่อ รายวิชา ผลการแก้ไข และลายมือชื่อครูชัดเจน · รูปย่อขนาดอัตโนมัติ</div>`;
+  const draw = () => {
+    $('.thumbs', root).innerHTML = files.map((f, i) => `<div class="th">${/^image\//.test(f.type) ? `<img src="${f._url || (f._url = URL.createObjectURL(f))}" alt="">` : `<div class="doc">📄<br>${esc(f.name)}</div>`}
+      <button type="button" class="th-x" data-rm="${i}" aria-label="ลบรูป">×</button></div>`).join('');
+    $$('[data-rm]', root).forEach(b => b.onclick = () => { files.splice(+b.dataset.rm, 1); draw(); });
+    $('.ev-hint', root).textContent = files.length ? `แนบแล้ว ${files.length} ไฟล์ — ถ่ายเพิ่มได้` : 'ถ่ายให้เห็นชื่อ รายวิชา ผลการแก้ไข และลายมือชื่อครูชัดเจน · รูปย่อขนาดอัตโนมัติ';
   };
+  $$('[data-ev]', root).forEach(inp => inp.onchange = () => { files.push(...Array.from(inp.files || [])); inp.value = ''; draw(); });
+  if (files.length) draw();
+  return { files: () => files.slice(), clear: () => { files.length = 0; draw(); } };
+}
+
+/** ยื่นคำร้อง: เลือกวิชา (ได้หลายวิชา) + ถ่ายรูป/แนบใบแก้ → 1 เลขคำร้อง ส่งถึงงานวัดผล */
+function newRequestDlg(eligible, preselect) {
+  const m = modal(`<div class="modal-h"><h3>ยื่นคำร้องแก้ไขผลการเรียน</h3><button class="x" data-close>×</button></div>
+    <div class="modal-b">
+      <div class="step-h"><span>1</span> เลือกรายวิชาที่ต้องการแก้</div>
+      <div class="pick-list">${eligible.map(r => `<label class="pick"><input type="checkbox" class="nr-sub" value="${esc(r.gk)}" ${r.gk === preselect || eligible.length === 1 ? 'checked' : ''}>
+        <span><b>${esc(r.code)}</b> ${esc(r.sub.name || '')}<div class="small muted">ภาคเรียน ${esc(r.t.semester)}/${esc(r.t.academic_year)}${r.failed ? ' · ยื่นครั้งที่ ' + (r.failed + 1) : ''}</div></span>
+        ${gradeChip(r.grade, 'fail')}</label>`).join('')}</div>
+      ${eligible.length > 1 ? '<button type="button" class="btn sm" id="nr-all" style="margin-top:6px">เลือกทุกวิชา</button>' : ''}
+      <div class="step-h"><span>2</span> ถ่ายรูปใบแก้ 0 / ร ที่ฝ่ายวิชาการแจก</div>
+      <div id="nr-ev"></div>
+      <div class="step-h"><span>3</span> หมายเหตุ (ถ้ามี)</div>
+      <textarea class="in" id="nr-reason" rows="2" placeholder="เช่น สอบแก้ตัวแล้ว ครูลงนามในใบแก้เรียบร้อย"></textarea>
+      <div class="small muted" style="margin-top:8px">ทุกวิชาที่เลือกจะอยู่ใน <b>เลขคำร้องเดียว</b> · งานวัดผลตรวจหลักฐาน → ฝ่ายวิชาการอนุมัติ (อนุมัติได้ทีละวิชาหรือทั้งหมด)</div>
+    </div>
+    <div class="modal-f"><button class="btn" data-close>ยกเลิก</button><button class="btn pri big" id="nr-ok">ส่งคำร้อง</button></div>`, { sticky: true, sheet: true });
+  const ev = evidencePicker($('#nr-ev', m));
+  const all = $('#nr-all', m); if (all) all.onclick = () => $$('.nr-sub', m).forEach(c => c.checked = true);
   $('#nr-ok', m).onclick = () => quiet(run(async () => {
     const picked = $$('.nr-sub:checked', m).map(c => eligible.find(r => r.gk === c.value));
     if (!picked.length) throw new Error('กรุณาเลือกรายวิชาอย่างน้อย 1 วิชา');
-    const files = Array.from($('#nr-files', m).files || []);
-    if (!files.length) throw new Error('กรุณาแนบรูปหรือไฟล์ใบแก้ 0 / ร');
+    const files = ev.files();
+    if (!files.length) throw new Error('กรุณาถ่ายรูปหรือแนบไฟล์ใบแก้ 0 / ร');
     const prepared = await prepareFiles(files);
     const reason = $('#nr-reason', m).value.trim();
-    // 1) สร้างคำร้องทุกวิชาพร้อมกัน
     const d = new Date();
-    const datePart = String(d.getFullYear() + 543).slice(-2) + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0');
-    const b = F.writeBatch(db);
-    const ids = picked.map(row => {
+    const no = 'RQ' + String(d.getFullYear() + 543).slice(-2) + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0') + '-' + genCode(4);
+    const items = picked.map(row => ({ row, id: row.gk + '_' + ((row.rs[0] ? row.rs[0].seq : 0) + 1) }));
+    await inChunks(items, (b, { row, id }) => {
       const t = row.t, g = row.grade;
-      const seq = (row.rs[0] ? row.rs[0].seq : 0) + 1;
-      const id = row.gk + '_' + seq;
       b.set(R.req(id), {
-        request_no: 'RQ' + datePart + '-' + genCode(4), grade_key: row.gk, term_id: t.id, course_id: '', seq, academic_year: t.academic_year, semester: t.semester,
+        request_no: no, grade_key: row.gk, term_id: t.id, course_id: '', seq: Number(id.split('_').pop()), academic_year: t.academic_year, semester: t.semester,
         student_id: S.me.sid, student_name: S.me.name, class: t.class || S.me.cls, subject_code: row.code,
         subject_name: row.sub.name || '', credit: String(row.sub.credit || ''), original_grade: g,
         request_type: REQ_TYPE[g] || ('แก้ผลการเรียน ' + g), reason, teacher_email: '', teacher_name: row.sub.teacher_name || '', status: 'SUBMITTED',
@@ -643,19 +700,14 @@ function newRequestDlg(eligible, preselect) {
         created_at: F.serverTimestamp(), updated_at: F.serverTimestamp()
       });
       b.set(logRef(id), logData('ยื่นคำร้อง', (REQ_TYPE[g] || g) + (reason ? ' — ' + reason : ''), 'นักเรียน'));
-      return id;
-    });
-    await b.commit();
-    // 2) อัปโหลดหลักฐานครั้งเดียว ใช้ร่วมกันทุกวิชาที่เลือก
-    try {
-      await attachEvidence(ids, prepared, reason, false);
-    } catch (e) {
-      closeModal();
-      throw new Error('สร้างคำร้องแล้ว แต่แนบไฟล์ไม่สำเร็จ (' + errMsg(e) + ') — เปิดคำร้องที่เมนู "คำร้องของฉัน" แล้วแนบไฟล์อีกครั้ง');
-    }
+    }, 'กำลังสร้างคำร้อง');
+    const ids = items.map(x => x.id);
+    try { await attachEvidence(ids, prepared, reason, false); }
+    catch (e) { closeModal(); throw new Error('สร้างคำร้อง ' + no + ' แล้ว แต่แนบรูปไม่สำเร็จ (' + errMsg(e) + ') — เปิดคำร้องที่ "คำร้องของฉัน" แล้วแนบอีกครั้ง'); }
     closeModal();
-    toast(`ส่งคำร้อง ${ids.length} วิชาเรียบร้อย` + (S.me.contact ? ' — ส่งอีเมลยืนยันไปที่ ' + S.me.contact : ''), 'ok');
+    toast(`ส่งคำร้อง ${no} (${ids.length} วิชา) เรียบร้อย` + (S.me.contact ? ' — ส่งอีเมลยืนยันแล้ว' : ''), 'ok');
     notifyEmail('submitted', ids);
+    go('myreq');
   }, 'กำลังส่งคำร้อง...'));
 }
 
@@ -664,49 +716,52 @@ async function prepareFiles(files) {
   const max = Number(S.settings.max_upload_mb || 10) * 1024 * 1024;
   const out = [];
   for (const f of files) {
-    let blob = f, name = f.name, mime = f.type || 'application/octet-stream';
-    if (/^image\/(jpeg|png|webp|heic|heif)$/i.test(f.type) && f.size > 500 * 1024) {
+    let blob = f, name = f.name || ('photo-' + Date.now() + '.jpg'), mime = f.type || 'application/octet-stream';
+    if (/^image\//i.test(f.type) && !/gif|svg/i.test(f.type) && f.size > 400 * 1024) {
       try {
         const bmp = await createImageBitmap(f);
-        const sc = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+        const sc = Math.min(1, 1800 / Math.max(bmp.width, bmp.height));
         const c = document.createElement('canvas'); c.width = Math.round(bmp.width * sc); c.height = Math.round(bmp.height * sc);
         const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(bmp, 0, 0, c.width, c.height);
-        const jb = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.82));
+        const jb = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.8));
         if (jb && jb.size < f.size) { blob = jb; mime = 'image/jpeg'; name = name.replace(/\.[^.]+$/, '') + '.jpg'; }
       } catch (e) { /* ย่อไม่ได้ ใช้ไฟล์เดิม */ }
     }
-    if (blob.size > max) throw new Error('ไฟล์ ' + f.name + ' ใหญ่เกิน ' + (S.settings.max_upload_mb || 10) + ' MB');
+    if (blob.size > max) throw new Error('ไฟล์ ' + name + ' ใหญ่เกิน ' + (S.settings.max_upload_mb || 10) + ' MB');
     out.push({ blob, name, mime });
   }
   return out;
 }
 
-/** อัปโหลดหลักฐานไป Google Drive (ไฟล์ละครั้ง) แล้วผูกกับทุกคำร้องใน ids; resubmit = ส่งกลับให้งานวัดผลตรวจอีกครั้ง */
+/** อัปโหลดหลักฐานไป Google Drive (ไฟล์ละครั้ง) แล้วผูกกับทุกรายวิชาใน ids; resubmit = ส่งกลับให้งานวัดผลตรวจอีกครั้ง */
 async function attachEvidence(ids, prepared, note, resubmit) {
   const saved = [];
   for (let i = 0; i < prepared.length; i++) {
     const p = prepared[i];
-    loading(true, `กำลังอัปโหลด ${i + 1}/${prepared.length} — ${p.name}`);
+    loading(true, `กำลังอัปโหลด ${i + 1}/${prepared.length}`);
     const meta = await gasCall({ action: 'upload', request_ids: ids, request_id: ids[0], name: p.name, mime: p.mime, data: await fileToB64(p.blob) });
     saved.push({ ...meta, file_name: p.name, mime: p.mime });
   }
-  const b = F.writeBatch(db);
   const names = saved.map(x => x.file_name).join(', ');
-  ids.forEach(id => {
+  await inChunks(ids, (b, id) => {
     saved.forEach(x => b.set(F.doc(F.collection(db, 'requests', id, 'files')), {
       file_name: x.file_name, mime: x.mime, size: x.size, drive_id: x.drive_id, note: note || '',
       uploader_role: 'student', uploaded_by: S.me.email, uploaded_at: F.serverTimestamp()
     }));
     b.update(R.req(id), { ...(resubmit ? { status: 'SUBMITTED' } : {}), work_note: note || '', files_count: F.increment(saved.length), updated_at: F.serverTimestamp() });
     b.set(logRef(id), logData(resubmit ? 'แนบหลักฐานใหม่และส่งตรวจอีกครั้ง' : 'แนบหลักฐาน', names + (note ? ' — ' + note : ''), 'นักเรียน'));
-  });
-  await b.commit();
+  }, 'กำลังบันทึก');
 }
 
 VIEWS.myreq = () => {
-  const rows = byUpdated(S.live.mine || []);
-  $('#view').innerHTML = `<div class="card">${reqTable(rows, { noStudent: true, empty: 'ยังไม่มีคำร้อง — ยื่นได้จากเมนู "ผลการเรียนของฉัน"' })}</div>`;
-  bindReqTable($('#view'));
+  const gs = groupReqs(S.live.mine || []);
+  $('#view').innerHTML = gs.length ? `<div class="rcards">${gs.map(g => `<div class="rcard ${g.status === 'REVISE' ? 'warn' : ''}" data-gno="${esc(g.no)}" data-gsid="${esc(g.sid)}">
+      <div class="row" style="justify-content:space-between"><b>${esc(g.no)}</b><span class="small muted">${esc(fmtTs(new Date(g.upd)))}</span></div>
+      <div style="margin:6px 0">${groupBadge(g)}</div>
+      <div class="subjs">${subjChips(g)}</div>
+      ${g.status === 'REVISE' ? '<div class="small" style="color:var(--warn);margin-top:6px"><b>ต้องแนบหลักฐานใหม่ — แตะเพื่อดูรายละเอียด</b></div>' : ''}
+    </div>`).join('')}</div>` : '<div class="card empty">ยังไม่มีคำร้อง — ยื่นได้จากหน้า "ผลการเรียน"</div>';
+  $$('[data-gno]').forEach(c => c.onclick = () => openGroup(c.dataset.gno, c.dataset.gsid));
 };
 
 VIEWS.semail = () => {
@@ -732,27 +787,7 @@ function notifyEmail(event, ids) {
   gasCall({ action: 'notify', event, request_ids: ids }).catch(e => console.warn('notify', e));
 }
 
-/* =========================== รายละเอียดคำร้อง =========================== */
-function canFlags(r) {
-  const own = isStudent() && r.student_id === S.me.sid;
-  const s = r.status;
-  return {
-    cancel: own && ['SUBMITTED', 'REVISE'].includes(s),
-    upload_student: own && ['SUBMITTED', 'REVISE'].includes(s),
-    measure: hasRole('measure') && s === 'SUBMITTED',
-    academic: hasRole('academic') && s === 'MEASURE_APPROVED'
-  };
-}
-
-function openRequest(rid) {
-  const st = { r: null, logs: [], files: [] };
-  const m = modal(`<div class="modal-h"><h3 id="rq-title">คำร้อง</h3><button class="x" data-close>×</button></div><div class="modal-b" id="rq-body"><div class="empty">กำลังโหลด...</div></div>`, { lg: true });
-  const draw = () => { if (st.r) drawRequest(m, st); };
-  S.modalUnsubs.push(F.onSnapshot(R.req(rid), s => { if (!s.exists()) return; st.r = { id: s.id, ...s.data() }; draw(); }, e => { $('#rq-body', m).innerHTML = `<div class="alert bad">${esc(errMsg(e))}</div>`; }));
-  S.modalUnsubs.push(F.onSnapshot(F.collection(db, 'requests', rid, 'logs'), s => { st.logs = snapList(s).sort((a, b) => (toDate(a.at) || 0) - (toDate(b.at) || 0)); draw(); }, () => {}));
-  S.modalUnsubs.push(F.onSnapshot(F.collection(db, 'requests', rid, 'files'), s => { st.files = snapList(s).sort((a, b) => (toDate(a.uploaded_at) || 0) - (toDate(b.uploaded_at) || 0)); draw(); }, () => {}));
-}
-
+/* =========================== รายละเอียดคำร้อง (1 เลข หลายวิชา) =========================== */
 function stepper(status) {
   const stop = ['FAILED', 'REJECTED', 'CANCELLED'].includes(status);
   const done = STEP_DONE[status] || 0;
@@ -762,70 +797,106 @@ function stepper(status) {
   }).join('')}</div>`;
 }
 
-function drawRequest(m, st) {
-  const r = st.r, can = canFlags(r);
-  const body = $('#rq-body', m);
-  // จำค่าที่พิมพ์ค้างไว้ไม่ให้หายตอนข้อมูลอัปเดต
-  const keep = {}; $$('textarea,input,select', body).forEach(el => { if (el.id) keep[el.id] = el.value; });
-  $('#rq-title', m).innerHTML = `คำร้อง ${esc(r.request_no)} ${badge(r.status)}`;
-  const sg = r.signs || {};
-  const signChip = (k, label) => sg[k] ? `<div class="sigchip">✓ ${label}: ${esc(sg[k].name)}<div class="small">${esc(fmtTs(sg[k].at))}</div></div>` : '';
-  const allowed = (S.settings.allowed || DEFAULT_SETTINGS.allowed)[r.original_grade] || [];
-  body.innerHTML = `
-    ${stepper(r.status)}
-    <div class="grid g2">
-      <div class="kv">
-        <div>นักเรียน</div><div><b>${esc(r.student_name)}</b> (${esc(r.student_id)}) ชั้น ${esc(r.class)}</div>
-        <div>รายวิชา</div><div><b>${esc(r.subject_code)}</b> ${esc(r.subject_name)} ${r.credit ? '(' + esc(r.credit) + ' นก.)' : ''}</div>
-        <div>ภาคเรียน</div><div>${esc(r.semester)}/${esc(r.academic_year)} · ยื่นครั้งที่ ${esc(r.seq)}</div>
-        <div>ผลการเรียน</div><div>${gradeChip(r.original_grade, 'fail')} ${r.new_grade ? '→ ' + gradeChip(r.new_grade, 'fixed') : ''} <span class="small muted">${esc(r.request_type)}</span></div>
-        ${r.teacher_name ? `<div>ครูผู้สอน</div><div>${esc(r.teacher_name)}</div>` : ''}
-        <div>ยื่นเมื่อ</div><div>${esc(fmtTs(r.created_at))}</div>
-        ${r.memo_no ? `<div>บันทึกข้อความ</div><div>ที่ ${esc(r.memo_no)}</div>` : ''}
-      </div>
-      <div>
-        <div class="box"><div class="small muted">หมายเหตุของนักเรียน</div>${esc(r.reason || r.work_note || '-')}</div>
-        ${r.assignment ? `<div class="box" style="margin-top:8px;background:var(--warn-2);border-color:#fde68a"><div class="small muted">งานที่ครูมอบหมาย${r.due_date ? ' · กำหนดส่ง ' + esc(thaiDateFull(r.due_date)) : ''}</div>${esc(r.assignment)}</div>` : ''}
-        ${['teacher_comment:ความเห็นครู', 'measure_comment:ความเห็นงานวัดผล', 'academic_comment:ความเห็นวิชาการ', 'director_comment:ความเห็น ผอ.'].map(x => { const [k, l] = x.split(':'); return r[k] ? `<div class="box" style="margin-top:8px"><div class="small muted">${l}</div>${esc(r[k])}</div>` : ''; }).join('')}
-      </div>
-    </div>
-    ${Object.keys(sg).length ? `<h4 style="margin:16px 0 8px">ลงนามอิเล็กทรอนิกส์</h4><div class="signs">${signChip('teacher', 'ครูผู้สอน')}${signChip('measure', 'งานวัดผล')}${signChip('academic', 'วิชาการ')}</div>` : ''}
-    <h4 style="margin:16px 0 8px">หลักฐาน / ใบแก้ 0 ร (${st.files.length})</h4>
-    <div class="files">${st.files.length ? st.files.map(f => `<div class="file"><span>${f.uploader_role === 'teacher' ? '👩‍🏫' : '🎓'}</span><span class="nm" title="${esc(f.file_name)}">${esc(f.file_name)}<div class="small muted">${esc(fmtTs(f.uploaded_at))} · ${(Number(f.size || 0) / 1024 / 1024).toFixed(2)} MB${f.note ? ' · ' + esc(f.note) : ''}</div></span><button class="btn sm" data-dl="${esc(f.id)}">เปิด</button></div>`).join('') : '<div class="alert bad small">ยังไม่มีหลักฐานแนบ</div>'}</div>
-    <div id="rq-actions">${actionPanel(r, can, allowed)}</div>
-    <h4 style="margin:18px 0 8px">ประวัติการดำเนินการ</h4>
-    <ul class="tl">${st.logs.map(l => `<li><div><b>${esc(l.action)}</b> — ${esc(l.actor_name)} <span class="small muted">(${esc(l.role)})</span></div>${l.detail ? `<div class="small">${esc(l.detail)}</div>` : ''}<div class="t">${esc(fmtTs(l.at))}</div></li>`).join('')}</ul>`;
-  Object.keys(keep).forEach(id => { const el = $('#' + id, body); if (el && el.type !== 'file') el.value = keep[id]; });
-  $$('[data-dl]', body).forEach(b => b.onclick = () => openFile(r.id, st.files.find(f => f.id === b.dataset.dl)));
-  bindActions(body, r, can);
+function openGroup(no, sid) {
+  const st = { items: [], logs: {}, files: {}, subs: new Set() };
+  const m = modal(`<div class="modal-h"><h3 id="rq-title">คำร้อง ${esc(no)}</h3><button class="x" data-close>×</button></div><div class="modal-b" id="rq-body"><div class="empty">กำลังโหลด...</div></div>`, { lg: true, sheet: true });
+  const draw = () => { if (st.items.length) drawGroup(m, st); };
+  const q = F.query(R.col('requests'), F.where('request_no', '==', no), F.where('student_id', '==', sid));
+  S.modalUnsubs.push(F.onSnapshot(q, s => {
+    st.items = snapList(s).sort((a, b) => a.subject_code.localeCompare(b.subject_code));
+    st.items.forEach(r => {           // ประวัติและไฟล์ของแต่ละรายวิชา
+      if (st.subs.has(r.id)) return; st.subs.add(r.id);
+      S.modalUnsubs.push(F.onSnapshot(F.collection(db, 'requests', r.id, 'logs'), x => { st.logs[r.id] = snapList(x).map(l => ({ ...l, _r: r })); draw(); }, () => {}));
+      S.modalUnsubs.push(F.onSnapshot(F.collection(db, 'requests', r.id, 'files'), x => { st.files[r.id] = snapList(x).map(f => ({ ...f, _rid: r.id })); draw(); }, () => {}));
+    });
+    draw();
+  }, e => { $('#rq-body', m).innerHTML = `<div class="alert bad">${esc(errMsg(e))}</div>`; }));
+}
+// ใช้กับลิงก์เก่าที่อ้างเลขเอกสาร
+async function openRequest(rid) {
+  const s = await F.getDoc(R.req(rid)); if (s.exists()) openGroup(s.data().request_no, s.data().student_id);
 }
 
-function actionPanel(r, can, allowed) {
-  const out = [];
-  if (r.status === 'REVISE' && can.upload_student) out.push(`<div class="alert warn" style="margin-top:12px"><b>ต้องแนบหลักฐานใหม่</b><div>${esc(r.measure_comment || r.academic_comment || '')}</div></div>`);
-  if (can.upload_student) out.push(`
-    <div class="card" style="margin-top:12px"><h3>${r.status === 'REVISE' ? 'แนบหลักฐานใหม่และส่งตรวจอีกครั้ง' : 'แนบหลักฐานเพิ่ม'}</h3>
-      <input type="file" id="a-files" multiple accept="image/*,application/pdf" class="in">
-      <label class="f" style="margin-top:8px"><span>หมายเหตุ</span><input class="in" id="a-fnote" placeholder="เช่น ถ่ายรูปใบแก้ใหม่ให้ชัดขึ้น"></label>
-      <div class="small muted">รูปถ่ายจะถูกย่อขนาดอัตโนมัติ · PDF ไม่เกิน ${esc(S.settings.max_upload_mb || 10)} MB · เก็บใน Google Drive ของโรงเรียน</div>
-      <div class="row" style="margin-top:8px"><button class="btn pri" id="a-upload">${r.status === 'REVISE' ? 'ส่งตรวจอีกครั้ง' : 'แนบไฟล์'}</button>
-      ${can.cancel ? '<button class="btn bad" id="a-cancel">ยกเลิกคำร้อง</button>' : ''}</div></div>`);
-  if (can.measure) out.push(`
-    <div class="card" style="margin-top:12px;border-color:#a7f3d0"><h3>งานวัดผล: ตรวจหลักฐานและกำหนดผลการเรียนใหม่</h3>
-      ${r.files_count ? '' : '<div class="alert bad small">คำร้องนี้ยังไม่มีหลักฐานแนบ — ส่งกลับให้นักเรียนแนบก่อน</div>'}
-      <div class="row"><label class="f"><span>ผลการเรียนใหม่ (ตามใบแก้)</span><select class="in" id="a-grade"><option value="">-- เลือก --</option>${allowed.map(g => `<option ${g === r.new_grade ? 'selected' : ''}>${esc(g)}</option>`).join('')}</select></label>
-      <div class="small muted grow">ตามเกณฑ์: แก้ ${esc(r.original_grade)} ได้สูงสุด ${esc(allowed[0] || '-')}</div></div>
-      <label class="f"><span>ความเห็น (จำเป็นเมื่อส่งกลับหรือไม่อนุมัติ)</span><textarea class="in" id="a-mcomment"></textarea></label>
-      <div class="row"><button class="btn ok" id="a-mok" ${r.files_count ? '' : 'disabled'}>✓ หลักฐานถูกต้อง เสนอวิชาการ (ลงนาม)</button>
+function mergedFiles(st) {
+  const seen = new Map();
+  Object.values(st.files).flat().sort((a, b) => (toDate(a.uploaded_at) || 0) - (toDate(b.uploaded_at) || 0))
+    .forEach(f => { if (!seen.has(f.drive_id)) seen.set(f.drive_id, f); });
+  return [...seen.values()];
+}
+function mergedLogs(st) {
+  const groups = new Map();
+  Object.values(st.logs).flat().forEach(l => {
+    const k = l.action + '|' + l.actor + '|' + Math.round((+(toDate(l.at) || 0)) / 2000);
+    if (!groups.has(k)) groups.set(k, { ...l, codes: [], details: new Set() });
+    const g = groups.get(k); g.codes.push(l._r.subject_code); if (l.detail) g.details.add(l.detail);
+  });
+  return [...groups.values()].sort((a, b) => (toDate(a.at) || 0) - (toDate(b.at) || 0));
+}
+
+function drawGroup(m, st) {
+  const items = st.items, f = items[0], body = $('#rq-body', m);
+  const keep = {}; $$('textarea,input:not([type=file]):not([type=checkbox]),select', body).forEach(el => { if (el.dataset.g) keep['g' + el.dataset.g] = el.value; else if (el.id) keep[el.id] = el.value; });
+  // สถานะรายวิชาเปลี่ยน (เพิ่งทำรายการ) → เริ่มเลือกทุกวิชาใหม่
+  const sig = items.map(r => r.id + ':' + r.status).join(',');
+  const chk = {}; if (st.sig === sig) $$('input[type=checkbox][data-sel]', body).forEach(el => chk[el.dataset.sel] = el.checked);
+  if (st.sig && st.sig !== sig) ['a-mcomment', 'a-accomment', 'a-fnote'].forEach(k => delete keep[k]);
+  st.sig = sig;
+  const gs = groupStatus(items);
+  const g = { items, status: gs, done: items.filter(r => r.status === 'COMPLETED').length };
+  $('#rq-title', m).innerHTML = `คำร้อง ${esc(f.request_no)} ${groupBadge(g)}`;
+  const files = mergedFiles(st);
+  const own = isStudent() && f.student_id === S.me.sid;
+  const by = stt => items.filter(r => r.status === stt);
+  const sub = by('SUBMITTED'), ma = by('MEASURE_APPROVED'), rev = by('REVISE');
+  const canM = hasRole('measure') && sub.length, canA = hasRole('academic') && ma.length;
+  const allowedOf = r => (S.settings.allowed || DEFAULT_SETTINGS.allowed)[r.original_grade] || [];
+  const comments = items.map(r => [r.measure_comment && ['งานวัดผล', r.measure_comment, r], r.academic_comment && ['วิชาการ', r.academic_comment, r]]).flat().filter(Boolean);
+  const cb = (r, on = true) => `<input type="checkbox" data-sel="${esc(r.id)}" ${(r.id in chk ? chk[r.id] : on) ? 'checked' : ''}>`;
+  const panels = [];
+  if (own && rev.length) panels.push(`<div class="card act warn"><h3>ต้องแนบหลักฐานใหม่ (${rev.length} วิชา)</h3>
+      ${rev.map(r => `<div class="small">• <b>${esc(r.subject_code)}</b> ${esc(r.academic_comment || r.measure_comment || '')}</div>`).join('')}
+      <div id="a-ev" style="margin-top:10px"></div>
+      <input class="in" id="a-fnote" placeholder="หมายเหตุ (ถ้ามี)" style="margin-top:8px">
+      <button class="btn pri big" id="a-resub" style="margin-top:10px">ส่งตรวจอีกครั้ง</button></div>`);
+  else if (own && sub.length) panels.push(`<div class="card act"><h3>แนบหลักฐานเพิ่ม</h3><div id="a-ev"></div>
+      <button class="btn pri" id="a-addev" style="margin-top:10px">แนบเพิ่ม</button></div>`);
+  if (own && (sub.length || rev.length)) panels.push(`<div class="row" style="margin-top:10px"><button class="btn bad sm" id="a-cancel">ยกเลิกคำร้อง</button></div>`);
+  if (canM) panels.push(`<div class="card act ok"><h3>งานวัดผล: ตรวจหลักฐานและกำหนดผลการเรียนใหม่</h3>
+      ${files.length ? '' : '<div class="alert bad small">ยังไม่มีหลักฐานแนบ — ส่งกลับให้นักเรียนแนบก่อน</div>'}
+      <div class="sel-list">${sub.map(r => `<label class="sel-row">${cb(r)}<span class="grow"><b>${esc(r.subject_code)}</b> ${esc(r.subject_name)}</span>
+        ${gradeChip(r.original_grade, 'fail')} → <select class="in sm" data-g="${esc(r.id)}"><option value="">ผลใหม่</option>${allowedOf(r).map(x => `<option ${x === (keep['g' + r.id] || r.new_grade) ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>`).join('')}</div>
+      <textarea class="in" id="a-mcomment" rows="2" placeholder="ความเห็น (จำเป็นเมื่อส่งกลับหรือไม่อนุมัติ)"></textarea>
+      <div class="row act-btns"><button class="btn ok" id="a-mok" ${files.length ? '' : 'disabled'}>✓ รับรองวิชาที่เลือก เสนอวิชาการ (ลงนาม)</button>
       <button class="btn warn" id="a-mret">ส่งกลับให้นักเรียนแนบใหม่</button><button class="btn bad" id="a-mno">ไม่อนุมัติ</button></div></div>`);
-  if (can.academic) out.push(`
-    <div class="card" style="margin-top:12px;border-color:#c7d2fe"><h3>ฝ่ายวิชาการ: อนุมัติการแก้ไขผลการเรียน</h3>
-      <div class="box" style="margin-bottom:8px">งานวัดผลเสนอ: ${gradeChip(r.original_grade, 'fail')} → ${gradeChip(r.new_grade, 'fixed')}${r.measure_comment ? ' — ' + esc(r.measure_comment) : ''}</div>
-      <label class="f"><span>ความเห็น (จำเป็นเมื่อส่งกลับหรือไม่อนุมัติ)</span><textarea class="in" id="a-accomment"></textarea></label>
-      <div class="row"><button class="btn ok" id="a-acok">✓ อนุมัติ (ลงนาม)</button><button class="btn warn" id="a-acret-m">ส่งกลับงานวัดผล</button>
+  if (canA) panels.push(`<div class="card act info"><h3>ฝ่ายวิชาการ: อนุมัติการแก้ไขผลการเรียน</h3>
+      <div class="sel-list">${ma.map(r => `<label class="sel-row">${cb(r)}<span class="grow"><b>${esc(r.subject_code)}</b> ${esc(r.subject_name)}</span>
+        ${gradeChip(r.original_grade, 'fail')} → ${gradeChip(r.new_grade, 'fixed')}</label>`).join('')}</div>
+      <textarea class="in" id="a-accomment" rows="2" placeholder="ความเห็น (จำเป็นเมื่อส่งกลับหรือไม่อนุมัติ)"></textarea>
+      <div class="row act-btns"><button class="btn ok" id="a-acok">✓ อนุมัติวิชาที่เลือก (ลงนาม)</button><button class="btn warn" id="a-acret-m">ส่งกลับงานวัดผล</button>
       <button class="btn warn" id="a-acret">ส่งกลับให้นักเรียนแนบใหม่</button><button class="btn bad" id="a-acno">ไม่อนุมัติ</button></div></div>`);
-  if (!out.length && can.cancel) out.push(`<div class="row" style="margin-top:12px"><button class="btn bad" id="a-cancel">ยกเลิกคำร้อง</button></div>`);
-  return out.join('');
+  body.innerHTML = `
+    ${stepper(gs)}
+    <div class="kv" style="margin-bottom:10px">
+      <div>นักเรียน</div><div><b>${esc(f.student_name)}</b> (${esc(f.student_id)}) ชั้น ${esc(f.class)}</div>
+      <div>ภาคเรียน</div><div>${[...new Set(items.map(r => r.semester + '/' + r.academic_year))].join(', ')}</div>
+      <div>ยื่นเมื่อ</div><div>${esc(fmtTs(f.created_at))}</div>
+      ${f.reason ? `<div>หมายเหตุ</div><div>${esc(f.reason)}</div>` : ''}
+    </div>
+    <h4 class="sec">รายวิชาในคำร้อง (${items.length})</h4>
+    <div class="ilist">${items.map(r => `<div class="irow"><div class="grow"><b>${esc(r.subject_code)}</b> ${esc(r.subject_name)}${r.credit ? ` <span class="small muted">${esc(r.credit)} นก.</span>` : ''}
+        ${r.signs && r.signs.measure ? `<div class="small muted">✓ งานวัดผล: ${esc(r.signs.measure.name)}</div>` : ''}${r.signs && r.signs.academic ? `<div class="small muted">✓ วิชาการ: ${esc(r.signs.academic.name)}</div>` : ''}</div>
+      <div class="right">${gradeChip(r.original_grade, 'fail')}${r.new_grade ? ' → ' + gradeChip(r.new_grade, 'fixed') : ''}<div>${badge(r.status)}</div></div></div>`).join('')}</div>
+    ${comments.length ? comments.map(([who, c, r]) => `<div class="box small" style="margin-top:6px"><b>${who}</b> (${esc(r.subject_code)}): ${esc(c)}</div>`).join('') : ''}
+    <h4 class="sec">หลักฐาน / ใบแก้ 0 ร (${files.length})</h4>
+    ${files.length ? `<div class="ev-grid">${files.map((x, i) => `<button type="button" class="ev-item" data-dl="${i}">${/^image\//.test(x.mime) ? '🖼️' : '📄'}<span>${esc(x.file_name)}</span><small>${esc(fmtTs(x.uploaded_at))}</small></button>`).join('')}</div>` : '<div class="alert bad small">ยังไม่มีหลักฐานแนบ</div>'}
+    <div id="rq-actions">${panels.join('')}</div>
+    <h4 class="sec">ประวัติการดำเนินการ</h4>
+    <ul class="tl">${mergedLogs(st).map(l => `<li><div><b>${esc(l.action)}</b> — ${esc(l.actor_name)} <span class="small muted">(${esc(l.role)})</span>${items.length > 1 ? ` <span class="small muted">· ${esc(l.codes.join(', '))}</span>` : ''}</div>${l.details.size ? `<div class="small">${[...l.details].map(esc).join('<br>')}</div>` : ''}<div class="t">${esc(fmtTs(l.at))}</div></li>`).join('')}</ul>`;
+  Object.keys(keep).forEach(k => { if (k.startsWith('g') && !k.startsWith('g-')) return; const el = document.getElementById(k); if (el && body.contains(el)) el.value = keep[k]; });
+  $$('[data-dl]', body).forEach(b => b.onclick = () => { const x = files[+b.dataset.dl]; openFile(x._rid, x); });
+  st.ev = st.ev || [];
+  const evRoot = $('#a-ev', body); const ev = evRoot ? evidencePicker(evRoot, st.ev) : null;
+  bindGroup(body, st, { sub, ma, rev, ev });
 }
 
 async function requireSignature(text) {
@@ -839,10 +910,7 @@ async function requireSignature(text) {
 const mySign = () => ({ email: S.me.email, name: S.me.name, position: S.me.position || '', at: F.serverTimestamp() });
 
 async function act(r, patch, action, detail, role) {
-  const b = F.writeBatch(db);
-  b.update(R.req(r.id), { ...patch, updated_at: F.serverTimestamp() });
-  b.set(logRef(r.id), logData(action, detail, role));
-  await b.commit();
+  const b = F.writeBatch(db); actOn(b, r, patch, action, detail, role); await b.commit();
 }
 
 /** วิชาการอนุมัติ: ปรับสถานะ + บันทึกผลการเรียนที่แก้แล้ว (fixes) ในชุดเดียวกัน */
@@ -853,65 +921,75 @@ function addApproval(b, r, comment, sign) {
     academic_year: r.academic_year, semester: r.semester, subject_code: r.subject_code, subject_name: r.subject_name,
     original_grade: r.original_grade, new_grade: r.new_grade, approved_by: S.me.name, approved_at: F.serverTimestamp()
   });
-  b.set(logRef(r.id), logData('ฝ่ายวิชาการอนุมัติและลงนาม', 'ปรับผลการเรียน ' + r.original_grade + ' → ' + r.new_grade + (comment ? ' — ' + comment : ''), 'หัวหน้าวิชาการ'));
+  b.set(logRef(r.id), logData('ฝ่ายวิชาการอนุมัติและลงนาม', r.subject_code + ': ' + r.original_grade + ' → ' + r.new_grade + (comment ? ' — ' + comment : ''), 'หัวหน้าวิชาการ'));
 }
 
-function bindActions(body, r, can) {
+function bindGroup(body, st, { sub, ma, rev, ev }) {
   const val = id => ($('#' + id, body) || {}).value || '';
   const on = (id, fn) => { const el = $('#' + id, body); if (el) el.onclick = () => quiet(run(fn)); };
   const need = (id, msg) => { const c = val(id).trim(); if (!c) throw new Error(msg); return c; };
-  on('a-cancel', async () => {
-    if (!await confirmDlg('ยกเลิกคำร้อง', 'ต้องการยกเลิกคำร้องนี้ใช่ไหม', 'ยกเลิกคำร้อง', 'bad')) return;
-    await act(r, { status: 'CANCELLED' }, 'ยกเลิกคำร้อง', '', 'นักเรียน');
+  const picked = list => { const ids = $$('input[data-sel]:checked', body).map(c => c.dataset.sel); const out = list.filter(r => ids.includes(r.id)); if (!out.length) throw new Error('กรุณาเลือกรายวิชาอย่างน้อย 1 วิชา'); return out; };
+  const codes = rs => rs.map(r => r.subject_code).join(', ');
+  // นักเรียน
+  on('a-resub', async () => {
+    const files = ev.files(); if (!files.length) throw new Error('กรุณาถ่ายรูปหรือแนบหลักฐานใหม่');
+    await attachEvidence(rev.map(r => r.id), await prepareFiles(files), val('a-fnote').trim(), true);
+    st.ev.length = 0; toast('ส่งตรวจอีกครั้งแล้ว', 'ok');
   });
-  on('a-upload', async () => {
-    const files = Array.from(($('#a-files', body) || {}).files || []);
-    if (!files.length) throw new Error('กรุณาเลือกไฟล์');
-    const resubmit = r.status === 'REVISE';
-    await attachEvidence([r.id], await prepareFiles(files), val('a-fnote').trim(), resubmit);
-    toast(resubmit ? 'ส่งตรวจอีกครั้งแล้ว' : 'แนบไฟล์แล้ว', 'ok');
+  on('a-addev', async () => {
+    const files = ev.files(); if (!files.length) throw new Error('กรุณาถ่ายรูปหรือเลือกไฟล์');
+    await attachEvidence(sub.map(r => r.id), await prepareFiles(files), '', false); st.ev.length = 0; toast('แนบเพิ่มแล้ว', 'ok');
+  });
+  on('a-cancel', async () => {
+    if (!await confirmDlg('ยกเลิกคำร้อง', 'ต้องการยกเลิกคำร้องนี้ (ทุกวิชาที่ยังไม่ได้ตรวจ) ใช่ไหม', 'ยกเลิกคำร้อง', 'bad')) return;
+    await inChunks([...sub, ...rev], (b, r) => actOn(b, r, { status: 'CANCELLED' }, 'ยกเลิกคำร้อง', r.subject_code, 'นักเรียน'));
   });
   // งานวัดผล
   on('a-mok', async () => {
-    const g = val('a-grade'); if (!g) throw new Error('กรุณาเลือกผลการเรียนใหม่ตามใบแก้');
+    const rs = picked(sub);
+    const gmap = {}; rs.forEach(r => { gmap[r.id] = ($(`[data-g="${CSS.escape(r.id)}"]`, body) || {}).value || ''; });
+    const miss = rs.filter(r => !gmap[r.id]); if (miss.length) throw new Error('กรุณาเลือกผลการเรียนใหม่ของ ' + codes(miss));
     const c = val('a-mcomment').trim();
-    if (!await requireSignature(`รับรองหลักฐานและผลการเรียนใหม่ ${r.original_grade} → ${g} วิชา ${r.subject_code} ของ ${r.student_name}`)) return;
-    await act(r, { status: 'MEASURE_APPROVED', new_grade: g, measure_comment: c, 'signs.measure': mySign() }, 'งานวัดผลตรวจหลักฐานและลงนาม', 'ผลการเรียนใหม่ ' + g + (c ? ' — ' + c : ''), 'หัวหน้างานวัดผล');
-    toast('ลงนามแล้ว ส่งต่อฝ่ายวิชาการ', 'ok');
+    if (!await requireSignature(`รับรองหลักฐานและผลการเรียนใหม่ของ ${st.items[0].student_name}: ` + rs.map(r => `${r.subject_code} ${r.original_grade}→${gmap[r.id]}`).join(', '))) return;
+    const sign = mySign();
+    await inChunks(rs, (b, r) => actOn(b, r, { status: 'MEASURE_APPROVED', new_grade: gmap[r.id], measure_comment: c, 'signs.measure': sign },
+      'งานวัดผลตรวจหลักฐานและลงนาม', r.subject_code + ': ผลการเรียนใหม่ ' + gmap[r.id] + (c ? ' — ' + c : ''), 'หัวหน้างานวัดผล'));
+    toast(`ลงนามแล้ว ${rs.length} วิชา ส่งต่อฝ่ายวิชาการ`, 'ok');
   });
   on('a-mret', async () => {
-    const c = need('a-mcomment', 'กรุณาระบุสิ่งที่นักเรียนต้องแนบใหม่ในช่องความเห็น');
-    await act(r, { status: 'REVISE', measure_comment: c }, 'ส่งกลับให้นักเรียนแนบหลักฐานใหม่', c, 'หัวหน้างานวัดผล');
-    notifyEmail('returned', [r.id]);
+    const rs = picked(sub); const c = need('a-mcomment', 'กรุณาระบุสิ่งที่นักเรียนต้องแนบใหม่ในช่องความเห็น');
+    await inChunks(rs, (b, r) => actOn(b, r, { status: 'REVISE', measure_comment: c }, 'ส่งกลับให้นักเรียนแนบหลักฐานใหม่', r.subject_code + ': ' + c, 'หัวหน้างานวัดผล'));
+    notifyEmail('returned', rs.map(r => r.id));
   });
   on('a-mno', async () => {
-    const c = need('a-mcomment', 'กรุณาระบุเหตุผลที่ไม่อนุมัติ');
-    if (!await confirmDlg('ไม่อนุมัติคำร้อง', 'เหตุผล: ' + esc(c), 'ยืนยันไม่อนุมัติ', 'bad')) return;
-    await act(r, { status: 'REJECTED', measure_comment: c }, 'งานวัดผลไม่อนุมัติ', c, 'หัวหน้างานวัดผล');
-    notifyEmail('rejected', [r.id]);
+    const rs = picked(sub); const c = need('a-mcomment', 'กรุณาระบุเหตุผลที่ไม่อนุมัติ');
+    if (!await confirmDlg('ไม่อนุมัติ', `วิชา ${esc(codes(rs))}<br>เหตุผล: ${esc(c)}`, 'ยืนยันไม่อนุมัติ', 'bad')) return;
+    await inChunks(rs, (b, r) => actOn(b, r, { status: 'REJECTED', measure_comment: c }, 'งานวัดผลไม่อนุมัติ', r.subject_code + ': ' + c, 'หัวหน้างานวัดผล'));
+    notifyEmail('rejected', rs.map(r => r.id));
   });
   // วิชาการ
   on('a-acok', async () => {
-    const c = val('a-accomment').trim();
-    if (!await requireSignature(`อนุมัติแก้ไขผลการเรียน ${r.original_grade} → ${r.new_grade} วิชา ${r.subject_code} ของ ${r.student_name}`)) return;
-    const b = F.writeBatch(db); addApproval(b, r, c, mySign()); await b.commit();
-    toast('อนุมัติแล้ว ผลการเรียนปรับเรียบร้อย', 'ok');
-    notifyEmail('approved', [r.id]);
+    const rs = picked(ma); const c = val('a-accomment').trim();
+    if (!await requireSignature(`อนุมัติแก้ไขผลการเรียนของ ${st.items[0].student_name}: ` + rs.map(r => `${r.subject_code} ${r.original_grade}→${r.new_grade}`).join(', '))) return;
+    const sign = mySign();
+    await inChunks(rs, (b, r) => addApproval(b, r, c, sign), 'กำลังอนุมัติ');
+    toast(`อนุมัติแล้ว ${rs.length} วิชา ผลการเรียนปรับเรียบร้อย`, 'ok');
+    notifyEmail('approved', rs.map(r => r.id));
   });
   on('a-acret-m', async () => {
-    const c = need('a-accomment', 'กรุณาระบุเหตุผลที่ส่งกลับ');
-    await act(r, { status: 'SUBMITTED', academic_comment: c, 'signs.measure': F.deleteField() }, 'ส่งกลับให้งานวัดผลตรวจใหม่', c, 'หัวหน้าวิชาการ');
+    const rs = picked(ma); const c = need('a-accomment', 'กรุณาระบุเหตุผลที่ส่งกลับ');
+    await inChunks(rs, (b, r) => actOn(b, r, { status: 'SUBMITTED', academic_comment: c, 'signs.measure': F.deleteField() }, 'ส่งกลับให้งานวัดผลตรวจใหม่', r.subject_code + ': ' + c, 'หัวหน้าวิชาการ'));
   });
   on('a-acret', async () => {
-    const c = need('a-accomment', 'กรุณาระบุสิ่งที่นักเรียนต้องแนบใหม่');
-    await act(r, { status: 'REVISE', academic_comment: c, 'signs.measure': F.deleteField() }, 'ส่งกลับให้นักเรียนแนบหลักฐานใหม่', c, 'หัวหน้าวิชาการ');
-    notifyEmail('returned', [r.id]);
+    const rs = picked(ma); const c = need('a-accomment', 'กรุณาระบุสิ่งที่นักเรียนต้องแนบใหม่');
+    await inChunks(rs, (b, r) => actOn(b, r, { status: 'REVISE', academic_comment: c, 'signs.measure': F.deleteField() }, 'ส่งกลับให้นักเรียนแนบหลักฐานใหม่', r.subject_code + ': ' + c, 'หัวหน้าวิชาการ'));
+    notifyEmail('returned', rs.map(r => r.id));
   });
   on('a-acno', async () => {
-    const c = need('a-accomment', 'กรุณาระบุเหตุผลที่ไม่อนุมัติ');
-    if (!await confirmDlg('ไม่อนุมัติคำร้อง', 'เหตุผล: ' + esc(c), 'ยืนยันไม่อนุมัติ', 'bad')) return;
-    await act(r, { status: 'REJECTED', academic_comment: c }, 'ฝ่ายวิชาการไม่อนุมัติ', c, 'หัวหน้าวิชาการ');
-    notifyEmail('rejected', [r.id]);
+    const rs = picked(ma); const c = need('a-accomment', 'กรุณาระบุเหตุผลที่ไม่อนุมัติ');
+    if (!await confirmDlg('ไม่อนุมัติ', `วิชา ${esc(codes(rs))}<br>เหตุผล: ${esc(c)}`, 'ยืนยันไม่อนุมัติ', 'bad')) return;
+    await inChunks(rs, (b, r) => actOn(b, r, { status: 'REJECTED', academic_comment: c }, 'ฝ่ายวิชาการไม่อนุมัติ', r.subject_code + ': ' + c, 'หัวหน้าวิชาการ'));
+    notifyEmail('rejected', rs.map(r => r.id));
   });
 }
 
@@ -960,7 +1038,8 @@ VIEWS.dash = async () => {
   const c = counts();
   const by = k => rows.reduce((a, r) => (a[r[k]] = (a[r[k]] || 0) + 1, a), {});
   const bySt = by('status');
-  const active = rows.filter(r => ACTIVE.includes(r.status)).length;
+  const groups = groupReqs(rows);
+  const active = groups.filter(g => ACTIVE.includes(g.status)).length;
   const done = bySt.COMPLETED || 0;
   const revise = rows.filter(r => r.status === 'REVISE');
   const top = (o, n = 8) => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, n);
@@ -974,13 +1053,13 @@ VIEWS.dash = async () => {
     <div class="small muted" style="margin-bottom:10px">${oversight() ? `ภาพรวมทั้งโรงเรียน ภาคเรียนที่ ${esc(s)}/${esc(y)}` : 'ครูดูผลการเรียนและพิมพ์รายงานได้ที่เมนู "ผลการเรียนนักเรียน" — คำร้องแก้ไขผลการเรียนดำเนินการโดยงานวัดผลและฝ่ายวิชาการ'}</div>
     ${todo.length ? `<div class="alert info" style="margin-bottom:14px"><b>งานที่รอคุณ</b><div>${todo.join(' · ')}</div></div>` : ''}
     <div class="grid g4">
-      <div class="card stat"><div class="n">${rows.length}</div><div class="l">คำร้องทั้งหมด</div></div>
-      <div class="card stat"><div class="n" style="color:var(--warn)">${active}</div><div class="l">กำลังดำเนินการ</div></div>
-      <div class="card stat"><div class="n" style="color:var(--ok)">${done}</div><div class="l">อนุมัติแล้ว</div></div>
-      <div class="card stat"><div class="n" style="color:var(--bad)">${revise.length}</div><div class="l">รอนักเรียนแนบหลักฐานใหม่</div></div>
+      <div class="card stat"><div class="n">${groups.length}</div><div class="l">คำร้องทั้งหมด (${rows.length} วิชา)</div></div>
+      <div class="card stat"><div class="n" style="color:var(--warn)">${active}</div><div class="l">คำร้องที่กำลังดำเนินการ</div></div>
+      <div class="card stat"><div class="n" style="color:var(--ok)">${done}</div><div class="l">วิชาที่อนุมัติแล้ว</div></div>
+      <div class="card stat"><div class="n" style="color:var(--bad)">${revise.length}</div><div class="l">วิชาที่รอนักเรียนแนบหลักฐานใหม่</div></div>
     </div>
     <div class="grid g2" style="margin-top:14px">
-      <div class="card"><h3>ตามสถานะ</h3>${Object.keys(ST_LABEL).filter(k => bySt[k]).map(k => `<div class="row" style="justify-content:space-between;margin:4px 0">${badge(k)}<b>${bySt[k]}</b></div>`).join('') || '<div class="muted">ยังไม่มีคำร้อง</div>'}</div>
+      <div class="card"><h3>ตามสถานะ (รายวิชา)</h3>${Object.keys(ST_LABEL).filter(k => bySt[k]).map(k => `<div class="row" style="justify-content:space-between;margin:4px 0">${badge(k)}<b>${bySt[k]}</b></div>`).join('') || '<div class="muted">ยังไม่มีคำร้อง</div>'}</div>
       <div class="card"><h3>รายวิชาที่มีคำร้องมากที่สุด</h3>${subj.map(([k, n]) => `<div style="margin:6px 0"><div class="row small" style="justify-content:space-between"><span>${esc(k)}</span><b>${n}</b></div><div class="bar"><i style="width:${n / maxN * 100}%"></i></div></div>`).join('') || '<div class="muted">-</div>'}</div>
     </div>
     ${revise.length ? `<div class="card"><h3>รอนักเรียนแนบหลักฐานใหม่</h3>${reqTable(revise, { noTeacher: true })}</div>` : ''}
@@ -1008,21 +1087,18 @@ VIEWS.measure = () => {
 VIEWS.academic = () => {
   const rows = byUpdated(S.live.academic || []).reverse();
   $('#view').innerHTML = `<div class="card"><p class="muted small" style="margin-top:0">คำร้องที่งานวัดผลตรวจหลักฐานและเสนอผลการเรียนใหม่แล้ว — เปิดดูทีละรายการ หรือเลือกหลายรายการแล้วอนุมัติพร้อมกัน</p>
-    ${rows.length ? `<div class="row" style="margin-bottom:8px"><button class="btn ok" id="ac-bulk">✓ อนุมัติรายการที่เลือก (ลงนามครั้งเดียว)</button><span class="small muted" id="ac-n"></span></div>` : ''}
+    ${rows.length ? `<div class="row" style="margin-bottom:8px"><button class="btn ok" id="ac-bulk">✓ อนุมัติทุกวิชาในคำร้องที่เลือก (ลงนามครั้งเดียว)</button><span class="small muted">ต้องการอนุมัติบางวิชา ให้เปิดคำร้องนั้น</span></div>` : ''}
     ${reqTable(rows, { noTeacher: true, check: true })}</div>`;
   const v = $('#view'); bindReqTable(v);
   const btn = $('#ac-bulk', v);
   if (btn) btn.onclick = () => quiet(run(async () => {
-    const ids = $$('.chk-row:checked', v).map(c => c.value);
-    if (!ids.length) throw new Error('กรุณาเลือกคำร้องที่จะอนุมัติ');
-    const sel = rows.filter(r => ids.includes(r.id));
-    if (!await requireSignature(`อนุมัติแก้ไขผลการเรียน ${sel.length} รายการ ตามที่งานวัดผลเสนอ`)) return;
+    const keys = $$('.chk-row:checked', v).map(c => c.value);
+    if (!keys.length) throw new Error('กรุณาเลือกคำร้องที่จะอนุมัติ');
+    const sel = rows.filter(r => keys.includes(r.request_no + '|' + r.student_id));
+    if (!await requireSignature(`อนุมัติแก้ไขผลการเรียน ${keys.length} คำร้อง (${sel.length} รายวิชา) ตามที่งานวัดผลเสนอ`)) return;
     const sign = mySign();
-    for (let i = 0; i < sel.length; i += 6) {           // ทีละ 6 รายการ (เพดานการตรวจสิทธิ์ต่อชุดของ Firestore)
-      loading(true, `กำลังอนุมัติ ${Math.min(i + 6, sel.length)}/${sel.length}`);
-      const b = F.writeBatch(db); sel.slice(i, i + 6).forEach(r => addApproval(b, r, '', sign)); await b.commit();
-    }
-    toast(`อนุมัติแล้ว ${sel.length} รายการ`, 'ok');
+    await inChunks(sel, (b, r) => addApproval(b, r, '', sign), 'กำลังอนุมัติ');
+    toast(`อนุมัติแล้ว ${keys.length} คำร้อง (${sel.length} รายวิชา)`, 'ok');
     notifyEmail('approved', sel.map(r => r.id));
   }, 'กำลังอนุมัติ...'));
 };
@@ -1628,7 +1704,7 @@ async function doImport(rows, year, sem, useBirth) {
   S._lastCodes = newCodes;
   $('#im-result').innerHTML = `<div class="alert ok" style="margin-top:12px"><b>นำเข้าเรียบร้อย</b><br>
     ผลการเรียน ${Object.keys(terms).length} เอกสาร (นักเรียน×ภาคเรียน) · นักเรียนใหม่ ${newCodes.length} คน · รายวิชา–ห้อง ${Object.keys(courses).length}
-    ${unresolved.size ? `<br>⚠️ ชื่อครูที่ยังไม่ตรงกับบัญชีบุคลากร ${unresolved.size} คน: ${esc([...unresolved].slice(0, 15).join(', '))} — เพิ่มบุคลากรด้วยชื่อเดียวกัน หรือกำหนดในเมนู "รายวิชา–ครูผู้สอน"` : ''}</div>
+</div>
     ${newCodes.length ? `<button class="btn" id="im-codes" style="margin-top:8px">พิมพ์ใบรหัสเริ่มต้นนักเรียนใหม่ (${newCodes.length})</button>` : ''}`;
   const bc = $('#im-codes'); if (bc) bc.onclick = () => printCodes(newCodes);
 }
@@ -1657,6 +1733,8 @@ VIEWS.students = async () => {
   v.innerHTML = `<div class="card" style="border-color:#c7d2fe"><h3>นำเข้าเลขประจำตัวประชาชน (สำหรับเข้าสู่ระบบครั้งแรก)</h3>
       <p class="small muted" style="margin-top:0">เลือกไฟล์ Excel รายชื่อนักเรียนที่มีคอลัมน์ <b>เลข ปปช.</b> และ <b>เลขประจำตัว</b> (อ่านทุกชีต) — ระบบ<b>ไม่เก็บเลขประจำตัวประชาชน</b> เก็บเฉพาะค่าที่เข้ารหัสแล้ว (hash) สำหรับตรวจสอบตอนเข้าสู่ระบบ<br>
       นักเรียนเข้าครั้งแรก: ชื่อผู้ใช้ = เลขประจำตัวประชาชน · รหัสผ่าน = เลขประจำตัวนักเรียน</p>
+      <div class="row" style="margin-bottom:8px"><button class="btn sm" id="cid-tpl">⬇️ ดาวน์โหลดไฟล์ต้นแบบ (Excel)</button>
+      <span class="small muted">กรอกตามต้นแบบ แยกชีตตามห้องได้ · คอลัมน์ที่จำเป็น: <b>เลข ปปช.</b> และ <b>เลขประจำตัว</b></span></div>
       <input type="file" class="in" id="cid-file" accept=".xlsx,.xls,.csv"><div id="cid-res"></div></div>
     <div class="card"><div class="row">
     <label class="f"><span>ชั้น/ห้อง</span><select class="in" id="sv-cls"><option value="">-- เลือก --</option>${classes.map(c => `<option ${c === S._svCls ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
@@ -1710,8 +1788,44 @@ VIEWS.students = async () => {
   $('#sv-cls').onchange = e => e.target.value && loadCls(e.target.value);
   $('#sv-find').onclick = () => quiet(run(async () => { const sid = lowerSid($('#sv-sid').value); if (!sid) return; const s = await F.getDoc(R.student(sid)); if (!s.exists()) throw new Error('ไม่พบนักเรียน'); await show([{ id: s.id, ...s.data() }]); }));
   $('#cid-file').onchange = e => { const f = e.target.files[0]; if (f) quiet(run(() => importCid(f), 'กำลังอ่านไฟล์...')); };
+  $('#cid-tpl').onclick = () => quiet(run(downloadCidTemplate, 'กำลังสร้างไฟล์...'));
   if (S._svCls) loadCls(S._svCls);
 };
+
+/** ไฟล์ต้นแบบนำเข้าเลขประจำตัวประชาชน (ตัวอย่างเป็นเลขสมมติ ผ่านหลักตรวจสอบ) */
+async function downloadCidTemplate() {
+  await loadXLSX();
+  const mk = b12 => { let s = 0; for (let i = 0; i < 12; i++) s += Number(b12[i]) * (13 - i); return b12 + ((11 - s % 11) % 10); };
+  const head = ['ที่', 'เลข ปปช.', 'เลขประจำตัว', 'คำนำหน้า', 'ชื่อ', 'สกุล'];
+  const sheet = (cls, rows) => {
+    const aoa = [[S.settings.school_name || 'โรงเรียน'], ['รายชื่อนักเรียนชั้น ' + cls], head, ...rows];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    // คอลัมน์เลข ปปช. และเลขประจำตัวเป็น "ข้อความ" กัน Excel แปลงเป็นเลขยกกำลัง/ตัดเลข 0 หน้า
+    for (let r = 3; r < aoa.length + 40; r++) ['B', 'C'].forEach(col => {
+      const ref = col + (r + 1); const c = ws[ref];
+      if (c) { c.t = 's'; c.v = String(c.v); c.z = '@'; } else ws[ref] = { t: 's', v: '', z: '@' };
+    });
+    ws['!ref'] = 'A1:F' + (aoa.length + 40);
+    ws['!cols'] = [{ wch: 5 }, { wch: 17 }, { wch: 12 }, { wch: 10 }, { wch: 16 }, { wch: 18 }];
+    return ws;
+  };
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, sheet('ม.1/1', [[1, mk('110000000001'), '10001', 'เด็กชาย', 'ตัวอย่าง', 'หนึ่ง'], [2, mk('110000000002'), '10002', 'เด็กหญิง', 'ตัวอย่าง', 'สอง']]), 'ม.1-1');
+  XLSX.utils.book_append_sheet(wb, sheet('ม.1/2', [[1, mk('110000000003'), '10031', 'เด็กชาย', 'ตัวอย่าง', 'สาม']]), 'ม.1-2');
+  const help = XLSX.utils.aoa_to_sheet([['วิธีใช้ไฟล์ต้นแบบนำเข้าเลขประจำตัวประชาชน'], [],
+    ['1. ลบแถวตัวอย่าง แล้วกรอกนักเรียนจริง (แยกชีตตามห้องได้ หรือรวมชีตเดียวก็ได้)'],
+    ['2. คอลัมน์ที่จำเป็น: "เลข ปปช." (13 หลัก) และ "เลขประจำตัว" (เลขประจำตัวนักเรียน) — ชื่อหัวคอลัมน์ต้องตรงตามนี้'],
+    ['3. หัวตารางอยู่แถวไหนก็ได้ภายใน 12 แถวแรก (มีชื่อโรงเรียน/ชื่อห้องด้านบนได้)'],
+    ['4. ให้คอลัมน์ "เลข ปปช." เป็นข้อความ (ตั้งไว้แล้ว) — ถ้าวางจากที่อื่นแล้วเลขกลายเป็น 1.10E+12 ให้จัดรูปแบบเซลล์เป็น "ข้อความ" แล้ววางใหม่'],
+    ['5. ระบบตรวจเลข ปปช. ตามหลักตรวจสอบหลักสุดท้าย เลขที่ไม่ถูกต้องจะถูกข้ามและแจ้งจำนวน'],
+    ['6. นักเรียนที่ไม่มีเลข ปปช. ปล่อยว่างได้ — ระบบให้ใช้ "รหัสเริ่มต้น 6 ตัว" (พิมพ์ใบรหัสจากเมนูนักเรียน) แทน'],
+    ['7. ระบบไม่เก็บเลข ปปช. จริง เก็บเฉพาะค่าเข้ารหัสสำหรับตรวจสอบตอนเข้าสู่ระบบ'],
+    ['8. นักเรียนเข้าสู่ระบบ: ชื่อผู้ใช้ = เลข ปปช. 13 หลัก · รหัสผ่าน = เลขประจำตัวนักเรียน'],
+    [], ['หมายเหตุ: เลข ปปช. ในแถวตัวอย่างเป็นเลขสมมติ']]);
+  help['!cols'] = [{ wch: 110 }];
+  XLSX.utils.book_append_sheet(wb, help, 'วิธีใช้');
+  XLSX.writeFile(wb, 'ต้นแบบ_นำเข้าเลขประจำตัวประชาชน.xlsx');
+}
 
 /** อ่าน Excel รายชื่อ (ทุกชีต) → เก็บ hash(เลขประจำตัว|เลขประชาชน) + ดัชนี hash(เลขประชาชน) → เลขประจำตัว (ไม่เก็บเลขจริง) */
 async function importCid(file) {
@@ -1890,8 +2004,87 @@ VIEWS.settings = async () => {
     o.allowed = computeAllowed(o.max_grade_0, o.max_grade_ms);
     await F.setDoc(R.settings(), o, { merge: true });
     await loadSettings(); toast('บันทึกแล้ว', 'ok');
-  }));
+  }));  if (S.me.email === BOOTSTRAP_ADMIN) testModePanel();
 };
+
+/* ---------- ล้างข้อมูลทดสอบ (เฉพาะผู้ดูแลระบบคนแรก ต้องเปิดด้วยรหัส) ---------- */
+async function testModePanel() {
+  const ref = F.doc(db, 'config', 'testmode');
+  const snap = await F.getDoc(ref).catch(() => null);
+  const on = !!(snap && snap.exists() && snap.data().on);
+  const box = document.createElement('div'); box.className = 'card'; box.style.borderColor = on ? '#fca5a5' : '';
+  box.innerHTML = `<h3>🧪 ล้างข้อมูลทดสอบ <span class="badge ${on ? 'b-red' : 'b-gray'}">${on ? 'เปิดอยู่' : 'ปิดอยู่'}</span></h3>
+    <p class="small muted" style="margin-top:0">ใช้ได้เฉพาะผู้ดูแลระบบคนแรก ต้องใส่รหัสเพื่อเปิด/ปิด · <b>เมื่อเริ่มใช้งานจริงให้ปิดไว้เสมอ</b> (ขณะปิด ระบบห้ามลบคำร้องและหลักฐานทุกกรณี)</p>
+    <div class="row"><input class="in" type="password" inputmode="numeric" id="tm-pin" placeholder="รหัส" style="max-width:140px" autocomplete="off">
+      <button class="btn ${on ? '' : 'warn'}" id="tm-toggle">${on ? 'ปิดโหมดล้างข้อมูล' : 'เปิดโหมดล้างข้อมูล'}</button></div>
+    ${on ? `<div style="margin-top:14px"><div class="small" style="margin-bottom:6px"><b>เลือกข้อมูลที่จะลบ</b></div>
+      <label class="pick"><input type="checkbox" data-del="req" checked><span><b>คำร้องทั้งหมด</b><div class="small muted">รวมหลักฐาน ประวัติ ผลที่แก้แล้ว และบันทึกข้อความ (ไฟล์รูปใน Google Drive ต้องลบเองที่โฟลเดอร์ "ระบบแก้ไขผลการเรียน - ไฟล์งาน")</div></span></label>
+      <label class="pick"><input type="checkbox" data-del="terms"><span><b>ผลการเรียนที่นำเข้า</b><div class="small muted">ผลการเรียนทุกภาคเรียน รายวิชา และรายชื่อห้อง — ต้องนำเข้า ปพ.6 ใหม่</div></span></label>
+      <label class="pick"><input type="checkbox" data-del="acc"><span><b>บัญชีเข้าสู่ระบบของนักเรียน</b><div class="small muted">นักเรียนทุกคนต้องเข้าสู่ระบบครั้งแรกใหม่ (ข้อมูลนักเรียนยังอยู่)</div></span></label>
+      <label class="pick"><input type="checkbox" data-del="stu"><span><b>ข้อมูลนักเรียนทั้งหมด</b><div class="small muted">รายชื่อ อีเมล และรหัสเริ่มต้น — ต้องนำเข้าผลการเรียนและเลข ปปช. ใหม่ (รวมการลบบัญชีด้วย)</div></span></label>
+      <div class="row" style="margin-top:10px"><input class="in" id="tm-confirm" placeholder='พิมพ์คำว่า "ลบ" เพื่อยืนยัน' style="max-width:220px"><button class="btn bad" id="tm-run">ลบข้อมูลที่เลือก</button></div>
+      <div id="tm-log" class="small muted" style="margin-top:8px"></div></div>` : ''}`;
+  $('#view').appendChild(box);
+  $('#tm-toggle', box).onclick = () => quiet(run(async () => {
+    const pin = $('#tm-pin', box).value.trim(); if (!pin) throw new Error('กรุณาใส่รหัส');
+    try { await F.setDoc(ref, { on: !on, pin, by: S.me.email, at: F.serverTimestamp() }); }
+    catch (e) { if (e.code === 'permission-denied') throw new Error('รหัสไม่ถูกต้อง'); throw e; }
+    toast(on ? 'ปิดโหมดล้างข้อมูลแล้ว' : 'เปิดโหมดล้างข้อมูลแล้ว', on ? 'ok' : 'bad'); VIEWS.settings();
+  }));
+  const runBtn = $('#tm-run', box);
+  if (runBtn) runBtn.onclick = () => quiet(run(async () => {
+    if ($('#tm-confirm', box).value.trim() !== 'ลบ') throw new Error('กรุณาพิมพ์คำว่า "ลบ" เพื่อยืนยัน');
+    const sel = Object.fromEntries($$('[data-del]', box).map(c => [c.dataset.del, c.checked]));
+    if (sel.stu) sel.acc = true;
+    if (!Object.values(sel).some(Boolean)) throw new Error('กรุณาเลือกข้อมูลที่จะลบ');
+    const log = t => { $('#tm-log', box).innerHTML += esc(t) + '<br>'; };
+    const wipe = async (refs, label) => {
+      for (let i = 0; i < refs.length; i += 400) {
+        loading(true, `${label} ${Math.min(i + 400, refs.length)}/${refs.length}`);
+        const b = F.writeBatch(db); refs.slice(i, i + 400).forEach(r => b.delete(r)); await b.commit();
+      }
+      log(`ลบ${label} ${refs.length} รายการ`);
+    };
+    const all = async col => (await F.getDocs(R.col(col))).docs.map(d => d.ref);
+    if (sel.req) {
+      const reqs = (await F.getDocs(R.col('requests'))).docs;
+      const subs = [];
+      for (let i = 0; i < reqs.length; i++) {
+        loading(true, `กำลังรวบรวมประวัติ/หลักฐาน ${i + 1}/${reqs.length}`);
+        for (const sc of ['logs', 'files']) (await F.getDocs(F.collection(db, 'requests', reqs[i].id, sc))).docs.forEach(d => subs.push(d.ref));
+      }
+      await wipe(subs, 'ประวัติและหลักฐาน');
+      await wipe(reqs.map(d => d.ref), 'คำร้อง (รายวิชา)');
+      await wipe(await all('fixes'), 'ผลที่แก้แล้ว');
+      await wipe(await all('memos'), 'บันทึกข้อความ');
+    }
+    if (sel.terms) {
+      await wipe(await all('terms'), 'ผลการเรียน');
+      await wipe(await all('courses'), 'รายวิชา');
+      await F.setDoc(R.meta(), { classes: [] }, { merge: true }); S._terms = null;
+    }
+    if (sel.acc) {
+      // ลบการผูกบัญชี และเลื่อนเลขรุ่นบัญชี (บัญชีเดิมใน Firebase Auth จะใช้ไม่ได้อีก นักเรียนเข้าครั้งแรกใหม่ได้)
+      const links = await all('student_links');
+      const vers = (await F.getDocs(R.col('student_ver'))).docs;
+      await wipe(links, 'บัญชีนักเรียนที่ผูกไว้');
+      for (let i = 0; i < vers.length; i += 400) {
+        loading(true, `ปรับรุ่นบัญชี ${Math.min(i + 400, vers.length)}/${vers.length}`);
+        const b = F.writeBatch(db); vers.slice(i, i + 400).forEach(d => b.set(d.ref, { v: Number(d.data().v || 0) + 1 })); await b.commit();
+      }
+      const secs = (await F.getDocs(R.col('student_secrets'))).docs;
+      for (let i = 0; i < secs.length; i += 400) {
+        const b = F.writeBatch(db); secs.slice(i, i + 400).forEach(d => b.set(d.ref, { v: Number(d.data().v || 0) + 1 }, { merge: true })); await b.commit();
+      }
+    }
+    if (sel.stu) {
+      await wipe(await all('students'), 'ข้อมูลนักเรียน');
+      await wipe(await all('student_secrets'), 'รหัสเริ่มต้น');
+    }
+    log('✓ เสร็จสิ้น'); toast('ลบข้อมูลทดสอบเรียบร้อย', 'ok');
+  }, 'กำลังลบ...'));
+}
+
 
 /* =========================== start =========================== */
 loadSettings().finally(() => {

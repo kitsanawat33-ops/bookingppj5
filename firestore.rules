@@ -55,6 +55,14 @@ service cloud.firestore {
       allow read: if true;                 // หน้าเข้าสู่ระบบต้องแสดงชื่อโรงเรียน
       allow write: if hasRole('admin');
     }
+    // โหมดล้างข้อมูลทดสอบ: เปิด/ปิดได้เฉพาะผู้ดูแลระบบคนแรก และต้องใส่รหัส (อ่านได้เฉพาะผู้ดูแลคนแรก)
+    match /config/testmode {
+      allow read: if isBootstrap();
+      allow write: if isBootstrap() && request.resource.data.pin == '3636'
+        && request.resource.data.keys().hasOnly(['on', 'pin', 'by', 'at'])
+        && request.resource.data.on is bool && request.resource.data.at == request.time;
+    }
+    function testMode() { return isBootstrap() && get(p('config/testmode')).data.on == true; }
     match /config/meta {                // รายชื่อชั้น/ห้อง (สร้างตอนนำเข้า)
       allow read: if isStaff();
       allow write: if dataAdmin();
@@ -215,7 +223,7 @@ service cloud.firestore {
       allow read: if isParty(resource.data);
       allow create: if validCreate(rid);
       allow update: if reqUpdate(rid);
-      allow delete: if false;
+      allow delete: if testMode();
 
       // ประวัติการดำเนินการ (เพิ่มได้อย่างเดียว ลบ/แก้ไม่ได้)
       match /logs/{lid} {
@@ -223,14 +231,16 @@ service cloud.firestore {
         allow read: if oversight() || isParty(get(p('requests/' + rid)).data);
         allow create: if request.resource.data.actor == email() && request.resource.data.at == request.time
           && (oversight() || isParty(get(p('requests/' + rid)).data) || isParty(getAfter(p('requests/' + rid)).data));
-        allow update, delete: if false;
+        allow update: if false;
+        allow delete: if testMode();
       }
       // รายการไฟล์แนบ (ตัวไฟล์อยู่ใน Google Drive)
       match /files/{fid} {
         allow read: if oversight() || isParty(get(p('requests/' + rid)).data);
         allow create: if isParty(get(p('requests/' + rid)).data)
           && request.resource.data.uploaded_by == email() && request.resource.data.uploaded_at == request.time;
-        allow update, delete: if false;
+        allow update: if false;
+        allow delete: if testMode();
       }
     }
 
@@ -240,7 +250,7 @@ service cloud.firestore {
       // เขียนได้เฉพาะหัวหน้าวิชาการ พร้อมกับการอนุมัติคำร้องในชุดเดียวกัน และค่าต้องตรงกับคำร้อง
       allow create, update: if hasRole('academic')
         && fixOk(gk, getAfter(p('requests/' + request.resource.data.request_id)).data);
-      allow delete: if false;
+      allow delete: if testMode();
     }
 
     // ---------- บันทึกข้อความ ----------
@@ -259,7 +269,7 @@ service cloud.firestore {
         && (request.resource.data.status == 'RETURNED'
             || (request.resource.data.signs.director.email == email()
                 && request.resource.data.signs.diff(resource.data.signs).affectedKeys().hasOnly(['director'])));
-      allow delete: if false;
+      allow delete: if testMode();
     }
   }
 }

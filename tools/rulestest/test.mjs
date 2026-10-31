@@ -2,7 +2,7 @@
 // รัน: cp ../../firestore.rules r.rules && firebase emulators:exec --only firestore --project demo-gf "node test.mjs"
 import { initializeTestEnvironment, assertSucceeds, assertFails } from '@firebase/rules-unit-testing';
 import { readFileSync } from 'fs';
-import { doc, setDoc, getDoc, updateDoc, serverTimestamp, Timestamp, writeBatch, collection, deleteField, increment } from 'firebase/firestore';
+import { doc, setDoc, getDoc, updateDoc, deleteDoc, serverTimestamp, Timestamp, writeBatch, collection, deleteField, increment } from 'firebase/firestore';
 const env = await initializeTestEnvironment({ projectId: 'demo-gf', firestore: { rules: readFileSync('r.rules', 'utf8'), host: '127.0.0.1', port: 8085 } });
 const ADMIN = 'kitsanawat33@gmail.com', T = 't@x.com', M = 'm@x.com', A = 'a@x.com', D = 'd@x.com';
 const SID = '4562', RID = '2569_1_4562_ง31223_1', GK = '2569_1_4562_ง31223';
@@ -76,5 +76,16 @@ await ok('student reads fix', getDoc(doc(stu, 'fixes', GK)));
     b.set(doc(dd, 'fixes', gk), { grade_key: gk, request_id: rid, student_id: SID, class: 'ม.4/2', original_grade: '0', new_grade: '1', approved_at: serverTimestamp() });
     b.set(...log(dd, rid, A)); }
   await ok('academic bulk approves 6 in one batch', b.commit()); }
+// โหมดล้างข้อมูลทดสอบ
+{ const ad = staff(ADMIN);
+  await no('delete request while test mode off', deleteDoc(doc(ad, 'requests', RID)));
+  await no('test mode wrong pin', setDoc(doc(ad, 'config', 'testmode'), { on: true, pin: '1111', by: ADMIN, at: serverTimestamp() }));
+  await no('other staff turns on test mode', setDoc(doc(staff(M), 'config', 'testmode'), { on: true, pin: '3636', by: M, at: serverTimestamp() }));
+  await ok('admin turns on test mode', setDoc(doc(ad, 'config', 'testmode'), { on: true, pin: '3636', by: ADMIN, at: serverTimestamp() }));
+  await no('student reads test mode', getDoc(doc(stu, 'config', 'testmode')));
+  await no('measure deletes request in test mode', deleteDoc(doc(staff(M), 'requests', RID)));
+  await ok('admin deletes fix in test mode', deleteDoc(doc(ad, 'fixes', GK)));
+  await ok('admin deletes request in test mode', deleteDoc(doc(ad, 'requests', RID)));
+  await ok('admin turns off test mode', setDoc(doc(ad, 'config', 'testmode'), { on: false, pin: '3636', by: ADMIN, at: serverTimestamp() })); }
 console.log(`\nRESULT ${pass} passed, ${fail} failed`);
 await env.cleanup();
