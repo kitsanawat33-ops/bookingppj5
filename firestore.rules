@@ -157,10 +157,10 @@ service cloud.firestore {
             'memo_id', 'memo_no', 'work_note', 'files_count', 'signs', 'created_at', 'updated_at']);
     }
 
-    function chg(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
+    function chg(ks) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(ks); }
     function stamped() { return request.resource.data.updated_at == request.time; }
-    function from(list) { return resource.data.status in list; }
-    function to(s) { return request.resource.data.status == s; }
+    function from(sts) { return resource.data.status in sts; }
+    function to(st) { return request.resource.data.status == st; }
     function working() { return ['ASSIGNED', 'REVISE', 'WORK_SUBMITTED', 'RETURNED']; }
     function own() { return isStudent() && resource.data.student_id == mySid(); }
     function isT() { return isStaff() && resource.data.teacher_email != '' && resource.data.teacher_email == email(); }
