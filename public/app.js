@@ -22,6 +22,8 @@ const ST_COLOR = {
 };
 const ACTIVE = ['SUBMITTED', 'ASSIGNED', 'WORK_SUBMITTED', 'REVISE', 'RETURNED', 'TEACHER_APPROVED',
   'MEASURE_APPROVED', 'ACADEMIC_APPROVED', 'IN_MEMO'];
+// สถานะที่ใช้ในขั้นตอนปัจจุบัน (ยื่นคำร้อง → งานวัดผล → วิชาการ) — ใช้ในตัวกรอง
+const ST_FLOW = ['SUBMITTED', 'REVISE', 'MEASURE_APPROVED', 'COMPLETED', 'REJECTED', 'CANCELLED'];
 const WORKING = ['ASSIGNED', 'REVISE', 'WORK_SUBMITTED', 'RETURNED'];
 const TERMINAL_RETRY = ['FAILED', 'REJECTED', 'CANCELLED'];
 const ROLE_LABEL = { teacher: 'ครูผู้สอน', measure: 'หัวหน้างานวัดผล', academic: 'หัวหน้าวิชาการ', director: 'ผู้อำนวยการ', admin: 'ผู้ดูแลระบบ' };
@@ -1470,7 +1472,7 @@ VIEWS.all = async () => {
       <label class="f"><span>ปีการศึกษา</span><input class="in" id="al-y" value="${esc(y)}" style="width:110px"></label>
       <label class="f"><span>ภาคเรียน</span><select class="in" id="al-s">${['1', '2', '3'].map(x => `<option ${x === s ? 'selected' : ''}>${x}</option>`).join('')}</select></label>
       <label class="f grow"><span>ค้นหา (ชื่อ เลขประจำตัว วิชา ครู ชั้น)</span><input class="in" id="al-q" value="${esc(S._allQ || '')}"></label>
-      <label class="f"><span>สถานะ</span><select class="in" id="al-st"><option value="">ทั้งหมด</option><option value="ACTIVE">กำลังดำเนินการ</option>${Object.keys(ST_LABEL).map(k => `<option value="${k}">${ST_LABEL[k]}</option>`).join('')}</select></label>
+      <label class="f"><span>สถานะ</span><select class="in" id="al-st"><option value="">ทั้งหมด</option><option value="ACTIVE">กำลังดำเนินการ</option>${ST_FLOW.map(k => `<option value="${k}">${ST_LABEL[k]}</option>`).join('')}</select></label>
       <button class="btn" id="al-load" style="margin-top:12px">โหลด</button><button class="btn" id="al-csv" style="margin-top:12px">CSV</button>
     </div><div id="al-list"><div class="empty">กำลังโหลด...</div></div></div>`;
   let rows = [];
