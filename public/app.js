@@ -177,6 +177,10 @@ const R = {
   col: name => F.collection(db, name)
 };
 const snapList = s => s.docs.map(d => ({ id: d.id, ...d.data() }));
+// นักเรียนที่มาจาก SchoolMIS (นำเข้า ปพ.6) — รายการที่เกิดจากไฟล์เลข ปปช. อย่างเดียวจะไม่มีชั้นเรียน
+const inMis = st => !!st && (st.src === 'mis' || !!st.class);
+const stuName = n => String(n || '').replace(/\s+/g, '').replace(/^(เด็กชาย|เด็กหญิง|ด\.ช\.|ด\.ญ\.|ดช\.?|ดญ\.?|นางสาว|น\.ส\.|นาย|นาง)/, '');
+const fmtCid = c => /^\d{13}$/.test(c || '') ? `${c[0]}-${c.slice(1, 5)}-${c.slice(5, 10)}-${c.slice(10, 12)}-${c[12]}` : (c || '');
 function logRef(rid) { return F.doc(F.collection(db, 'requests', rid, 'logs')); }
 function logData(action, detail, role) {
   return { at: F.serverTimestamp(), actor: S.me.email, actor_name: S.me.name, role: role || myRoleLabel(), action, detail: detail || '' };
@@ -346,7 +350,6 @@ function stuLoginForm() {
 async function getVer(sid) {
   const s = await F.getDoc(R.ver(sid));
   if (!s.exists()) throw new Error('ไม่พบเลขประจำตัวนี้ในระบบ');
-  if (s.data().moved_to) throw new Error('เลขประจำตัวนี้ถูกแก้เป็น ' + s.data().moved_to + ' แล้ว กรุณาเข้าสู่ระบบด้วยเลขใหม่ หรือเลขประจำตัวประชาชน');
   return Number(s.data().v || 0);
 }
 
@@ -1687,7 +1690,7 @@ async function doImport(rows, year, sem, useBirth) {
   const newCodes = [];
   for (const sid of Object.keys(students)) {
     const s = students[sid];
-    const sd = { updated_at: F.serverTimestamp() };
+    const sd = { updated_at: F.serverTimestamp(), src: 'mis' };
     if (s.name) sd.name = s.name;
     if (s.class) sd.class = s.class; if (s.number) sd.number = s.number;
     if (!existing.has(sid)) sd.active = true;
@@ -1739,28 +1742,35 @@ VIEWS.students = async () => {
   const meta = await F.getDoc(R.meta());
   const classes = (meta.exists() ? meta.data().classes || [] : []).slice().sort((a, b) => a.localeCompare(b, 'th', { numeric: true }));
   v.innerHTML = `<div class="card" style="border-color:#c7d2fe"><h3>นำเข้าเลขประจำตัวประชาชน (สำหรับเข้าสู่ระบบครั้งแรก)</h3>
-      <p class="small muted" style="margin-top:0">เลือกไฟล์ Excel รายชื่อนักเรียนที่มีคอลัมน์ <b>เลข ปปช.</b> และ <b>เลขประจำตัว</b> (อ่านทุกชีต) — ระบบ<b>ไม่เก็บเลขประจำตัวประชาชน</b> เก็บเฉพาะค่าที่เข้ารหัสแล้ว (hash) สำหรับตรวจสอบตอนเข้าสู่ระบบ<br>
+      <p class="small muted" style="margin-top:0">เลือกไฟล์ Excel รายชื่อนักเรียนที่มีคอลัมน์ <b>เลข ปปช.</b> และ <b>เลขประจำตัว</b> (อ่านทุกชีต) — ยึด<b>เลขประจำตัวตาม SchoolMIS</b> เป็นหลัก — แถวที่เลขไม่ตรงจะแจ้งให้ตรวจก่อนนำเข้า · เลขประจำตัวประชาชนเห็นได้เฉพาะผู้ดูแลและงานวัดผล<br>
       นักเรียนเข้าครั้งแรก: ชื่อผู้ใช้ = เลขประจำตัวประชาชน · รหัสผ่าน = เลขประจำตัวนักเรียน</p>
       <div class="row" style="margin-bottom:8px"><button class="btn sm" id="cid-tpl">⬇️ ดาวน์โหลดไฟล์ต้นแบบ (Excel)</button>
       <span class="small muted">กรอกตามต้นแบบ แยกชีตตามห้องได้ · คอลัมน์ที่จำเป็น: <b>เลข ปปช.</b> และ <b>เลขประจำตัว</b></span></div>
       <input type="file" class="in" id="cid-file" accept=".xlsx,.xls,.csv"><div id="cid-res"></div></div>
+    <div class="card"><div class="row"><h3 class="grow" style="margin:0">ตรวจสอบความถูกต้องของข้อมูลนักเรียน</h3><button class="btn sm" id="sv-audit">🔍 ตรวจสอบทั้งหมด</button></div>
+      <div id="sv-audit-res" class="small muted" style="margin-top:6px">ตรวจหา: เลขประจำตัวที่ไม่มีใน SchoolMIS · เลขประจำตัวประชาชนซ้ำ/รูปแบบผิด · นักเรียนที่ยังไม่มีเลขประชาชน</div></div>
     <div class="card"><div class="row">
     <label class="f"><span>ชั้น/ห้อง</span><select class="in" id="sv-cls"><option value="">-- เลือก --</option>${classes.map(c => `<option ${c === S._svCls ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
     <label class="f"><span>หรือค้นหาเลขประจำตัว</span><input class="in" id="sv-sid" placeholder="เลขประจำตัว"></label>
     <button class="btn" id="sv-find" style="margin-top:12px">ค้นหา</button></div><div id="sv-list" class="muted small">เลือกชั้นเพื่อแสดงรายชื่อ</div></div>`;
   const show = async (list) => {
+    const cidOwners = {}; (await F.getDocs(R.col('student_secrets'))).docs.forEach(d => { const c = d.data().cid; if (c) (cidOwners[c] = cidOwners[c] || []).push(d.id); });
     const info = await Promise.all(list.map(async s => {
       const [sec, ln] = await Promise.all([F.getDoc(R.secret(s.id)), F.getDoc(R.link(s.id))]);
       const sd = sec.exists() ? sec.data() : {};
-      return { ...s, code: sd.code || '', mode: sd.mode || 'code', h: sd.h || '', ck: sd.ck || '', v: sd.v || 0, active_acc: ln.exists(), dflt: ln.exists() && ln.data().dflt === true };
+      const cid = sd.cid || '';
+      return { ...s, code: sd.code || '', mode: sd.mode || 'code', h: sd.h || '', ck: sd.ck || '', cid, v: sd.v || 0, active_acc: ln.exists(), dflt: ln.exists() && ln.data().dflt === true,
+        dupWith: cid ? (cidOwners[cid] || []).filter(x => x !== s.id) : [], badCid: cid && !validCid(cid), noMis: !inMis(s) };
     }));
     info.sort((a, b) => (Number(a.number) || 0) - (Number(b.number) || 0) || a.id.localeCompare(b.id));
     $('#sv-list').innerHTML = `<div class="row" style="margin:8px 0"><span class="small muted grow">${info.length} คน · เปิดใช้งานแล้ว ${info.filter(x => x.active_acc).length}</span>
       <button class="btn sm" id="sv-print">พิมพ์ใบรหัส (ที่ยังไม่เปิดใช้งาน)</button></div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>เลขที่</th><th>เลขประจำตัว</th><th>ชื่อ–สกุล</th><th>ชั้น</th><th>บัญชี</th><th>เข้าครั้งแรกด้วย</th><th></th></tr></thead><tbody>
-      ${info.map(s => `<tr><td>${esc(s.number)}</td><td>${esc(s.id)}</td><td>${esc(s.name)}</td><td>${esc(s.class)}</td>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>เลขที่</th><th>เลขประจำตัว</th><th>ชื่อ–สกุล</th><th>ชั้น</th><th>เลขประจำตัวประชาชน</th><th>บัญชี</th><th>เข้าครั้งแรกด้วย</th><th></th></tr></thead><tbody>
+      ${info.map(s => `<tr${s.noMis || s.dupWith.length || s.badCid ? ' style="background:#fff7ed"' : ''}><td>${esc(s.number)}</td><td>${esc(s.id)}${s.noMis ? '<br><span class="badge b-red">ไม่มีใน SchoolMIS</span>' : ''}</td><td>${esc(s.name)}</td><td>${esc(s.class)}</td>
+        <td class="small" style="white-space:nowrap">${s.cid ? `<code>${esc(fmtCid(s.cid))}</code>` : s.mode === 'cid' ? '<span class="muted">มีแล้ว (นำเข้าก่อนอัปเดต — นำเข้าไฟล์อีกครั้งเพื่อแสดง)</span>' : '<span class="muted">—</span>'}
+          ${s.badCid ? '<br><span class="badge b-red">รูปแบบไม่ถูกต้อง</span>' : ''}${s.dupWith.length ? `<br><span class="badge b-red">ซ้ำกับ ${esc(s.dupWith.join(', '))}</span>` : ''}</td>
         <td>${s.active_acc ? (s.dflt ? '<span class="badge b-amber">ใช้รหัสเริ่มต้นอยู่</span>' : '<span class="badge b-green">เปิดใช้งานแล้ว</span>') : '<span class="badge b-gray">ยังไม่เปิด</span>'}</td>
-        <td class="small">${s.mode === 'cid' ? 'เลข ปชช. + เลขประจำตัว' : (s.active_acc ? '—' : `รหัสเริ่มต้น <code>${esc(s.code)}</code>`)}</td><td class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn sm" data-ename="${esc(s.id)}">แก้ชื่อ</button><button class="btn sm" data-ecid="${esc(s.id)}">แก้เลข ปชช.</button><button class="btn sm" data-esid="${esc(s.id)}">แก้เลขประจำตัว</button><button class="btn sm warn" data-reset="${esc(s.id)}">รีเซ็ตรหัส</button></td></tr>`).join('')}</tbody></table></div>`;
+        <td class="small">${s.mode === 'cid' ? 'เลข ปชช. + เลขประจำตัว' : (s.active_acc ? '—' : `รหัสเริ่มต้น <code>${esc(s.code)}</code>`)}</td><td class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn sm" data-ename="${esc(s.id)}">แก้ชื่อ</button><button class="btn sm" data-ecid="${esc(s.id)}">แก้เลข ปชช.</button><button class="btn sm warn" data-reset="${esc(s.id)}">รีเซ็ตรหัส</button>${s.noMis ? `<button class="btn sm bad" data-del="${esc(s.id)}">ลบ</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
     $$('[data-ename]').forEach(b => b.onclick = () => {
       const s = info.find(x => x.id === b.dataset.ename);
       const m = modal(`<div class="modal-h"><h3>แก้ไขชื่อนักเรียน ${esc(s.id)}</h3><button class="x" data-close>×</button></div>
@@ -1774,7 +1784,7 @@ VIEWS.students = async () => {
       }));
     });
     $$('[data-ecid]').forEach(b => b.onclick = () => editCid(info.find(x => x.id === b.dataset.ecid), () => { const cls = $('#sv-cls').value; if (cls) loadCls(cls); else show([s0(b.dataset.ecid)]); }));
-    $$('[data-esid]').forEach(b => b.onclick = () => editSid(info.find(x => x.id === b.dataset.esid), nsid => { const cls = $('#sv-cls').value; if (cls) loadCls(cls); else $('#sv-sid').value = nsid, $('#sv-find').click(); }));
+    $$('[data-del]').forEach(b => b.onclick = () => deleteStudent(info.find(x => x.id === b.dataset.del), () => { const cls = $('#sv-cls').value; if (cls) loadCls(cls); else $('#sv-list').innerHTML = ''; }));
     const s0 = id => { const x = info.find(y => y.id === id); return { id: x.id, name: x.name, class: x.class, number: x.number }; };
     $('#sv-print').onclick = () => printCodes(info.filter(x => !x.active_acc && x.code && x.mode !== 'cid').map(x => [x.id, x.name, x.class, x.code]));
     $$('[data-reset]').forEach(b => b.onclick = async () => {
@@ -1784,7 +1794,7 @@ VIEWS.students = async () => {
       quiet(run(async () => {
         const nv = s.v + 1; const code = cidMode ? '' : genCode();
         const bt = F.writeBatch(db);
-        bt.set(R.secret(s.id), cidMode ? { h: s.h, mode: 'cid', v: nv, ...(s.ck ? { ck: s.ck } : {}) } : { h: await codeHash(s.id, code), code, v: nv });
+        bt.set(R.secret(s.id), cidMode ? { h: s.h, mode: 'cid', v: nv, ...(s.ck ? { ck: s.ck } : {}), ...(s.cid ? { cid: s.cid } : {}) } : { h: await codeHash(s.id, code), code, v: nv });
         bt.set(R.ver(s.id), { v: nv });
         bt.delete(R.link(s.id));
         await bt.commit();
@@ -1800,6 +1810,7 @@ VIEWS.students = async () => {
   $('#sv-find').onclick = () => quiet(run(async () => { const sid = lowerSid($('#sv-sid').value); if (!sid) return; const s = await F.getDoc(R.student(sid)); if (!s.exists()) throw new Error('ไม่พบนักเรียน'); await show([{ id: s.id, ...s.data() }]); }));
   $('#cid-file').onchange = e => { const f = e.target.files[0]; if (f) quiet(run(() => importCid(f), 'กำลังอ่านไฟล์...')); };
   $('#cid-tpl').onclick = () => quiet(run(downloadCidTemplate, 'กำลังสร้างไฟล์...'));
+  $('#sv-audit').onclick = () => quiet(run(() => auditStudents(list => show(list)), 'กำลังตรวจสอบ...'));
   if (S._svCls) loadCls(S._svCls);
 };
 
@@ -1808,10 +1819,14 @@ VIEWS.students = async () => {
 function editCid(s, done) {
   const m = modal(`<div class="modal-h"><h3>แก้เลขประจำตัวประชาชน</h3><button class="x" data-close>×</button></div>
     <div class="modal-b"><div class="small" style="margin-bottom:10px"><b>${esc(s.name)}</b> · เลขประจำตัว ${esc(s.id)} · ${esc(s.class || '')}<br>
-      <span class="muted">${s.mode === 'cid' ? 'มีเลขประจำตัวประชาชนในระบบแล้ว (ระบบไม่แสดงเลขเดิม เพราะเก็บแบบเข้ารหัส)' : 'ยังไม่มีเลขประจำตัวประชาชนในระบบ'}</span></div>
-      <label class="f"><span>เลขประจำตัวประชาชนที่ถูกต้อง (13 หลัก)</span><input class="in" id="ec-cid" inputmode="numeric" maxlength="17" autocomplete="off"></label>
+      <span class="muted">เลขปัจจุบัน: ${s.cid ? '<b>' + esc(fmtCid(s.cid)) + '</b>' : s.mode === 'cid' ? 'มีแล้ว แต่นำเข้าก่อนอัปเดตจึงแสดงไม่ได้' : 'ยังไม่มี'}</span></div>
+      <label class="f"><span>เลขประจำตัวประชาชนที่ถูกต้อง (13 หลัก)</span><input class="in" id="ec-cid" inputmode="numeric" maxlength="17" autocomplete="off" value="${esc(s.cid || '')}"></label>
+      <div class="small" id="ec-hint" style="min-height:18px;margin:-4px 0 6px"></div>
       <div class="small muted">${s.active_acc ? 'นักเรียนเปิดใช้งานบัญชีแล้ว — รหัสผ่านเดิมยังใช้ได้ หลังแก้จะเข้าด้วยเลขประชาชนใหม่หรือเลขประจำตัวก็ได้' : 'หลังแก้ นักเรียนเข้าครั้งแรกด้วย เลขประจำตัวประชาชนใหม่ + รหัสผ่าน = เลขประจำตัวนักเรียน'}</div></div>
     <div class="modal-f"><button class="btn" data-close>ยกเลิก</button><button class="btn pri" id="ec-ok">บันทึก</button></div>`);
+  const hint = () => { const c = $('#ec-cid', m).value.replace(/\D/g, ''); const h = $('#ec-hint', m);
+    h.innerHTML = !c ? '' : c.length < 13 ? `<span class="muted">${c.length}/13 หลัก</span>` : validCid(c) ? '<span style="color:var(--ok)">✓ รูปแบบถูกต้อง</span>' : '<span style="color:var(--bad)">✗ เลขไม่ถูกต้อง (หลักสุดท้ายไม่ตรงหลักตรวจสอบ)</span>'; };
+  $('#ec-cid', m).oninput = hint; hint();
   $('#ec-ok', m).onclick = () => quiet(run(async () => {
     const cid = $('#ec-cid', m).value.replace(/\D/g, '');
     if (!validCid(cid)) throw new Error('เลขประจำตัวประชาชนไม่ถูกต้อง (ต้องมี 13 หลัก และหลักสุดท้ายต้องตรงตามหลักตรวจสอบ)');
@@ -1828,7 +1843,7 @@ function editCid(s, done) {
     const bt = F.writeBatch(db);
     if (s.ck && s.ck !== ck) bt.delete(F.doc(db, 'cid_index', s.ck));
     bt.set(F.doc(db, 'cid_index', ck), { sid: s.id });
-    bt.set(R.secret(s.id), { h: await codeHash(s.id, cid), mode: 'cid', v: s.v || 0, ck });
+    bt.set(R.secret(s.id), { h: await codeHash(s.id, cid), mode: 'cid', v: s.v || 0, ck, cid });
     if (!s.ck && s.mode !== 'cid') bt.set(R.ver(s.id), { v: s.v || 0 }, { merge: true });
     let code = '';
     if (other) {
@@ -1844,71 +1859,49 @@ function editCid(s, done) {
   }));
 }
 
-// เปลี่ยนเลขประจำตัวนักเรียน (ใบรายชื่อ/ปพ.6 ใส่เลขผิด) — ย้ายผลการเรียน + ตั้งบัญชีใหม่ แล้วลบรายการเลขเดิม
-function editSid(s, done) {
-  const m = modal(`<div class="modal-h"><h3>แก้เลขประจำตัวนักเรียน</h3><button class="x" data-close>×</button></div>
-    <div class="modal-b"><div class="small" style="margin-bottom:10px"><b>${esc(s.name)}</b> · เลขประจำตัวเดิม <b>${esc(s.id)}</b> · ${esc(s.class || '')}</div>
-      <label class="f"><span>เลขประจำตัวที่ถูกต้อง</span><input class="in" id="es-sid" inputmode="numeric" autocomplete="off"></label>
-      <label class="f"><span>เลขประจำตัวประชาชน (ไม่บังคับ — ใส่แล้วนักเรียนเข้าด้วยเลข ปชช. ได้ทันที)</span><input class="in" id="es-cid" inputmode="numeric" maxlength="17" autocomplete="off"></label>
-      <div class="alert info small">• ถ้ายังไม่มีเลขใหม่ในระบบ: ย้ายผลการเรียนทุกภาคเรียนไปเลขใหม่<br>• ถ้ามีเลขใหม่อยู่แล้ว (เช่น นำเข้า ปพ.6 ที่ถูกต้องแล้ว): รวมเข้าด้วยกัน ใช้ผลการเรียนของเลขใหม่เป็นหลัก<br>• จากนั้นลบรายการเลขเดิม และบัญชีเดิมจะใช้ไม่ได้ — นักเรียนเข้าใหม่ด้วยเลข ปชช. (ถ้าใส่) หรือรหัสเริ่มต้นที่ระบบออกให้<br>• ควรแก้เลขใน SchoolMIS ด้วย ไม่เช่นนั้นการนำเข้า ปพ.6 ครั้งต่อไปจะสร้างเลขเดิมกลับมา</div></div>
-    <div class="modal-f"><button class="btn" data-close>ยกเลิก</button><button class="btn pri" id="es-ok">ตรวจสอบ</button></div>`);
-  $('#es-ok', m).onclick = () => quiet(run(async () => {
-    const ns = lowerSid($('#es-sid', m).value);
-    const cid = $('#es-cid', m).value.replace(/\D/g, '');
-    if (!/^\d{1,10}$/.test(ns)) throw new Error('เลขประจำตัวต้องเป็นตัวเลข');
-    if (ns === s.id) throw new Error('เลขใหม่เหมือนเลขเดิม');
-    if (cid && !validCid(cid)) throw new Error('เลขประจำตัวประชาชนไม่ถูกต้อง');
-    const reqs = await F.getDocs(F.query(R.col('requests'), F.where('student_id', '==', s.id)));
-    const liveReq = reqs.docs.filter(d => d.data().status !== 'CANCELLED');
-    if (liveReq.length) throw new Error(`เลขเดิมมีคำร้อง ${liveReq.length} รายการ ย้ายอัตโนมัติไม่ได้ — ให้ยกเลิก/ปิดคำร้องก่อน หรือแจ้งผู้พัฒนา`);
-    const [oldTerms, newTerms, ns0, osec] = await Promise.all([
-      F.getDocs(F.query(R.col('terms'), F.where('student_id', '==', s.id))).then(snapList),
-      F.getDocs(F.query(R.col('terms'), F.where('student_id', '==', ns))).then(snapList),
-      F.getDoc(R.student(ns)), F.getDoc(R.secret(s.id))]);
-    const merge = ns0.exists();
-    const have = new Set(newTerms.map(t => t.academic_year + '/' + t.semester));
-    const move = oldTerms.filter(t => !have.has(t.academic_year + '/' + t.semester));
-    const ck = cid ? await cidKey(cid) : '';
-    let other = null;
-    if (ck) { const cur = await F.getDoc(F.doc(db, 'cid_index', ck)); if (cur.exists() && ![s.id, ns].includes(cur.data().sid)) other = cur.data().sid; }
-    closeModal();
-    if (!await confirmDlg('ยืนยันแก้เลขประจำตัว', `<b>${esc(s.name)}</b><br>${esc(s.id)} → <b>${esc(ns)}</b>${merge ? ` <span class="badge b-amber">มีเลข ${esc(ns)} ในระบบแล้ว: ${esc(ns0.data().name || '')}</span>` : ''}
-      <ul class="small" style="margin:8px 0 0;padding-left:18px">
-        <li>ย้ายผลการเรียน ${move.length} ภาคเรียน${oldTerms.length - move.length ? ` (ข้าม ${oldTerms.length - move.length} ภาคเรียนที่เลขใหม่มีอยู่แล้ว)` : ''}</li>
-        <li>ลบรายการเลข ${esc(s.id)} และบัญชีเดิม</li>
-        <li>บัญชีเลข ${esc(ns)}: ${cid ? 'เข้าด้วยเลข ปชช. + รหัสผ่าน = ' + esc(ns) : merge ? 'ใช้บัญชีของเลขใหม่ตามเดิม (ถ้ามี) หรือออกรหัสเริ่มต้นใหม่' : 'ออกรหัสเริ่มต้น 6 ตัวใหม่'}</li>
-        ${other ? `<li style="color:var(--bad)">เลข ปชช. นี้ผูกกับ ${esc(other)} อยู่ — จะย้ายมาและรีเซ็ตบัญชี ${esc(other)}</li>` : ''}</ul>`, 'แก้เลขประจำตัว', 'bad')) return;
-    loading(true, 'กำลังย้ายข้อมูล...');
-    const [nsec, nver, oInfo] = await Promise.all([F.getDoc(R.secret(ns)), F.getDoc(R.ver(ns)),
-      other ? F.getDoc(R.secret(other)) : null]);
-    const nv = (nsec.exists() ? Number(nsec.data().v || 0) : nver.exists() ? Number(nver.data().v || 0) : -1) + 1;
-    const keepNew = merge && nsec.exists() && !cid;   // เลขใหม่มีบัญชีอยู่แล้ว และไม่ได้ใส่เลข ปชช. → ใช้บัญชีเดิมของเลขใหม่
-    const code = cid || keepNew ? '' : genCode(); const ocode = other ? genCode() : '';
+// ลบรายการนักเรียนที่ไม่มีใน SchoolMIS (เกิดจากเลขประจำตัวผิดในไฟล์เลข ปปช.) — เฉพาะที่ไม่มีผลการเรียนและคำร้อง
+async function deleteStudent(s, done) {
+  await run(async () => {
+    const [terms, reqs] = await Promise.all([
+      F.getDocs(F.query(R.col('terms'), F.where('student_id', '==', s.id))),
+      F.getDocs(F.query(R.col('requests'), F.where('student_id', '==', s.id)))]);
+    if (terms.size || reqs.size) throw new Error(`ลบไม่ได้ — เลข ${s.id} มีผลการเรียน ${terms.size} ภาคเรียน และคำร้อง ${reqs.size} รายการ`);
+  });
+  if (!await confirmDlg('ลบรายการนักเรียน', `ลบ <b>${esc(s.name || s.id)}</b> (เลขประจำตัว ${esc(s.id)})<br><span class="small muted">ไม่มีใน SchoolMIS ไม่มีผลการเรียนและคำร้อง — บัญชีเข้าระบบของเลขนี้จะใช้ไม่ได้</span>`, 'ลบ', 'bad')) return;
+  await quiet(run(async () => {
+    const sec = await F.getDoc(R.secret(s.id));
+    const ck = sec.exists() ? sec.data().ck || (sec.data().cid ? await cidKey(sec.data().cid) : '') : '';
     const bt = F.writeBatch(db);
-    const sd = { ...s }; ['id', 'code', 'mode', 'h', 'ck', 'v', 'active_acc', 'dflt'].forEach(k => delete sd[k]);
-    if (!merge) bt.set(R.student(ns), { ...sd, updated_at: F.serverTimestamp() });
-    move.forEach(t => { const { id, ...td } = t; bt.set(R.term(ns + '_' + t.academic_year + '_' + t.semester), { ...td, student_id: ns }); });
-    oldTerms.forEach(t => bt.delete(R.term(t.id)));
-    bt.delete(R.student(s.id)); bt.delete(R.secret(s.id)); bt.delete(R.link(s.id));
-    bt.set(R.ver(s.id), { v: (s.v || 0) + 1, moved_to: ns });
-    if (osec.exists() && osec.data().ck) bt.delete(F.doc(db, 'cid_index', osec.data().ck));
-    if (nsec.exists() && nsec.data().ck && nsec.data().ck !== ck && cid) bt.delete(F.doc(db, 'cid_index', nsec.data().ck));
-    if (!keepNew) {
-      bt.set(R.secret(ns), cid ? { h: await codeHash(ns, cid), mode: 'cid', v: nv, ck } : { h: await codeHash(ns, code), code, v: nv });
-      bt.set(R.ver(ns), { v: nv });
-      bt.delete(R.link(ns));
-    }
-    if (ck) bt.set(F.doc(db, 'cid_index', ck), { sid: ns });
-    if (other) {
-      const ov = (oInfo && oInfo.exists() ? Number(oInfo.data().v || 0) : 0) + 1;
-      bt.set(R.secret(other), { h: await codeHash(other, ocode), code: ocode, v: ov });
-      bt.set(R.ver(other), { v: ov }); bt.delete(R.link(other));
-    }
-    await bt.commit();
-    loading(false);
-    await confirmDlg('แก้เลขประจำตัวแล้ว', `<div class="center">${esc(s.name)}<br>เลขประจำตัว <b>${esc(ns)}</b><br>${cid ? 'เข้าสู่ระบบด้วย เลขประจำตัวประชาชน + รหัสผ่าน = <b>' + esc(ns) + '</b>' : keepNew ? 'ใช้บัญชีของเลข ' + esc(ns) + ' ตามเดิม' : `รหัสเริ่มต้นใหม่<div style="font-size:2rem;letter-spacing:.2em;font-weight:700;margin:10px">${code}</div>`}</div>${other ? `<hr><div class="center">บัญชี ${esc(other)} ถูกรีเซ็ต — รหัสเริ่มต้นใหม่<div style="font-size:2rem;letter-spacing:.2em;font-weight:700;margin:10px">${ocode}</div></div>` : ''}`, 'ตกลง');
-    done && done(ns);
+    if (ck) { const ix = await F.getDoc(F.doc(db, 'cid_index', ck)); if (ix.exists() && ix.data().sid === s.id) bt.delete(F.doc(db, 'cid_index', ck)); }
+    bt.delete(R.student(s.id)); bt.delete(R.secret(s.id)); bt.delete(R.link(s.id)); bt.delete(R.ver(s.id));
+    await bt.commit(); toast('ลบแล้ว', 'ok'); done && done();
   }));
+}
+
+// ตรวจสอบข้อมูลนักเรียนทั้งหมด
+async function auditStudents(showList) {
+  const [studs, secs] = await Promise.all([F.getDocs(R.col('students')).then(snapList), F.getDocs(R.col('student_secrets')).then(snapList)]);
+  const sec = {}; secs.forEach(x => sec[x.id] = x);
+  const noMis = studs.filter(x => !inMis(x));
+  const owners = {}; secs.forEach(x => { if (x.cid) (owners[x.cid] = owners[x.cid] || []).push(x.id); });
+  const dups = Object.entries(owners).filter(([, a]) => a.length > 1);
+  const bad = secs.filter(x => x.cid && !validCid(x.cid));
+  const mis = studs.filter(inMis);
+  const noCid = mis.filter(x => (sec[x.id] || {}).mode !== 'cid');
+  const hidden = mis.filter(x => (sec[x.id] || {}).mode === 'cid' && !(sec[x.id] || {}).cid);
+  const byId = {}; studs.forEach(x => byId[x.id] = x);
+  const nm = id => esc((byId[id] || {}).name || '') + ` (${esc(id)}${(byId[id] || {}).class ? ' ' + esc(byId[id].class) : ''})`;
+  const box = $('#sv-audit-res');
+  const ok = !noMis.length && !dups.length && !bad.length;
+  box.className = '';
+  box.innerHTML = `<div class="alert ${ok ? 'ok' : 'warn'} small" style="margin-top:8px">
+    ${ok ? '✓ ไม่พบปัญหาเลขประจำตัวหรือเลขประจำตัวประชาชน' : '⚠️ พบรายการที่ควรตรวจสอบ'}<br>
+    นักเรียนจาก SchoolMIS ${mis.length} คน · มีเลขประชาชนแล้ว ${mis.length - noCid.length} คน · ยังไม่มี ${noCid.length} คน${hidden.length ? ` · นำเข้าก่อนอัปเดต (ยังไม่แสดงเลข) ${hidden.length} คน — นำเข้าไฟล์เลข ปปช. อีกครั้งเพื่อแสดง` : ''}</div>
+    ${noMis.length ? `<div style="margin-top:8px"><b>เลขประจำตัวที่ไม่มีใน SchoolMIS (${noMis.length})</b> <span class="muted">— มักเกิดจากเลขประจำตัวผิดในไฟล์เลข ปปช. ตรวจแล้วลบได้</span>
+      <div style="margin-top:4px">${noMis.map(x => `<button class="btn sm" data-aud="${esc(x.id)}">${nm(x.id)}</button>`).join(' ')}</div></div>` : ''}
+    ${dups.length ? `<div style="margin-top:8px"><b>เลขประจำตัวประชาชนซ้ำกัน (${dups.length})</b>${dups.map(([c, a]) => `<div>${esc(fmtCid(c))}: ${a.map(id => `<button class="btn sm" data-aud="${esc(id)}">${nm(id)}</button>`).join(' ')}</div>`).join('')}</div>` : ''}
+    ${bad.length ? `<div style="margin-top:8px"><b>เลขประจำตัวประชาชนรูปแบบไม่ถูกต้อง (${bad.length})</b><div>${bad.map(x => `<button class="btn sm" data-aud="${esc(x.id)}">${nm(x.id)}</button>`).join(' ')}</div></div>` : ''}`;
+  $$('[data-aud]', box).forEach(b => b.onclick = () => { const st = byId[b.dataset.aud]; showList([st ? { id: st.id, ...st } : { id: b.dataset.aud, name: '' }]); $('#sv-list').scrollIntoView({ behavior: 'smooth' }); });
 }
 
 async function downloadCidTemplate() {
@@ -1949,7 +1942,7 @@ async function downloadCidTemplate() {
 async function importCid(file) {
   await loadXLSX();
   const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-  const found = {}; let noCid = 0, badCid = 0;
+  const rows = []; let noCid = 0;
   wb.SheetNames.forEach(sn => {
     const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: '', raw: true });
     const hr = aoa.slice(0, 12).findIndex(r => r.some(c => /เลข\s*(ปปช|ปชช|ประจำตัวประชาชน|บัตรประชาชน)/.test(String(c))));
@@ -1958,48 +1951,106 @@ async function importCid(file) {
     const cC = h.findIndex(c => /เลข\s*(ปปช|ปชช|ประจำตัวประชาชน|บัตรประชาชน)/.test(c));
     const sC = h.findIndex((c, i) => i !== cC && /^(เลขประจำตัว|เลขประจำตัวนักเรียน|รหัสนักเรียน)$/.test(c.replace(/\s+/g, '')));
     if (sC < 0) return;
-    const pC = h.findIndex(c => /คำนำหน้า/.test(c)), nC = h.findIndex(c => /^ชื่อ$/.test(c)), lC = h.findIndex(c => /สกุล/.test(c));
-    aoa.slice(hr + 1).forEach(r => {
+    const pC = h.findIndex(c => /คำนำหน้า/.test(c)), nC = h.findIndex(c => /^ชื่อ$/.test(c) || /^ชื่อ-?สกุล$|^ชื่อ–สกุล$/.test(c)), lC = h.findIndex(c => /^(นาม)?สกุล$/.test(c));
+    aoa.slice(hr + 1).forEach((r, i) => {
       const sid = String(r[sC] == null ? '' : r[sC]).trim();
       if (!/^\d+$/.test(sid)) return;
       const raw = r[cC];
       const cid = (typeof raw === 'number' ? String(Math.round(raw)) : String(raw || '')).replace(/\D/g, '');
-      if (!cid) { if (!found[sid]) noCid++; return; }
-      if (!validCid(cid)) { badCid++; return; }
-      const name = [pC >= 0 ? r[pC] : '', nC >= 0 ? r[nC] : '', lC >= 0 ? r[lC] : ''].map(x => String(x || '').trim()).filter(Boolean);
-      found[sid] = { cid, name: name.length > 1 ? name[0] + name[1] + (name[2] ? ' ' + name[2] : '') : name.join(' ') };
+      const parts = [pC >= 0 ? r[pC] : '', nC >= 0 ? r[nC] : '', lC >= 0 && lC !== nC ? r[lC] : ''].map(x => String(x || '').trim()).filter(Boolean);
+      const name = parts.length > 1 && pC >= 0 ? parts[0] + parts[1] + (parts[2] ? ' ' + parts[2] : '') : parts.join(' ');
+      if (!cid) { noCid++; return; }
+      rows.push({ sid: lowerSid(sid), cid, name, where: `${sn} แถว ${hr + i + 2}` });
     });
   });
-  // เลขประชาชนเดียวกันแต่เลขประจำตัวต่างกัน = ข้อมูลผิด → ไม่ผูก ใช้รหัสเริ่มต้นแทน
-  const byCid = {}; Object.keys(found).forEach(sid => (byCid[found[sid].cid] = byCid[found[sid].cid] || []).push(sid));
-  const dupGroups = Object.values(byCid).filter(a => a.length > 1);
-  dupGroups.flat().forEach(sid => delete found[sid]);
-  const sids = Object.keys(found);
-  if (!sids.length) throw new Error('ไม่พบคอลัมน์ "เลข ปปช." และ "เลขประจำตัว" ในไฟล์');
-  const dupMsg = dupGroups.length ? `<br>⚠️ เลขประจำตัวประชาชนซ้ำกันระหว่างนักเรียนต่างเลขประจำตัว ${dupGroups.length} กรณี: <b>${dupGroups.map(g => g.join(' กับ ')).join(' · ')}</b> — ไม่ผูกเลขประชาชนให้ (ใช้รหัสเริ่มต้น 6 ตัวแทน) กรุณาตรวจใน SchoolMIS` : '';
-  if (!await confirmDlg('นำเข้าเลขประจำตัวประชาชน', `พบนักเรียนที่มีเลขประจำตัวประชาชนถูกต้อง <b>${sids.length}</b> คน${noCid ? `<br>ไม่มีเลขประชาชน ${noCid} แถว (ใช้รหัสเริ่มต้น 6 ตัวแทน)` : ''}${badCid ? `<br>⚠️ เลขไม่ถูกต้องตามหลักตรวจสอบ ${badCid} แถว (ข้าม)` : ''}${dupMsg}<br><br><span class="small muted">นักเรียนที่เปิดใช้งานบัญชีแล้วจะไม่ได้รับผลกระทบ</span>`, 'นำเข้า')) return;
-  loading(true, 'กำลังเตรียมข้อมูล...');
-  const vers = {}; (await F.getDocs(R.col('student_ver'))).docs.forEach(d => vers[d.id] = Number(d.data().v || 0));
+  if (!rows.length && !noCid) throw new Error('ไม่พบคอลัมน์ "เลข ปปช." และ "เลขประจำตัว" ในไฟล์');
+
+  loading(true, 'กำลังตรวจกับข้อมูล SchoolMIS...');
   const studs = {}; (await F.getDocs(R.col('students'))).docs.forEach(d => studs[d.id] = d.data());
-  const ops = [];
-  for (const sid of sids) {
-    const { cid, name } = found[sid];
-    const v = vers[sid] || 0;
-    const ck = await cidKey(cid);
-    ops.push([R.secret(sid), { h: await codeHash(sid, cid), mode: 'cid', v, ck }, false]);
-    ops.push([F.doc(db, 'cid_index', ck), { sid }, false]);
-    if (!(sid in vers)) ops.push([R.ver(sid), { v: 0 }, false]);
-    const st = studs[sid];
-    if (!st) ops.push([R.student(sid), { name, class: '', number: '', active: true, updated_at: F.serverTimestamp() }, false]);
-    else if (!st.name && name) ops.push([R.student(sid), { name }, true]);
-  }
-  for (let i = 0; i < ops.length; i += 450) {
-    loading(true, `กำลังบันทึก ${Math.min(i + 450, ops.length)}/${ops.length}`);
-    const b = F.writeBatch(db);
-    ops.slice(i, i + 450).forEach(([ref, data, merge]) => merge ? b.set(ref, data, { merge: true }) : b.set(ref, data));
-    await b.commit();
-  }
-  $('#cid-res').innerHTML = `<div class="alert ok small" style="margin-top:10px">นำเข้าเรียบร้อย ${sids.length} คน — นักเรียนเข้าสู่ระบบครั้งแรกด้วย เลขประจำตัวประชาชน + รหัสผ่าน = เลขประจำตัวนักเรียน${noCid ? `<br>นักเรียนที่ไม่มีเลขประชาชนในไฟล์ ใช้ "พิมพ์ใบรหัส" ในตารางด้านล่างแทน` : ''}${dupMsg}</div>`;
+  const mis = Object.keys(studs).filter(id => inMis(studs[id]));
+  const byName = {}; mis.forEach(id => { const k = stuName(studs[id].name); if (k) (byName[k] = byName[k] || []).push(id); });
+  const nameOk = (a, b) => !a || !b || stuName(a) === stuName(b);
+  const suggest = r => { const c = (byName[stuName(r.name)] || []).filter(id => id !== r.sid); return c.length === 1 ? c[0] : ''; };
+  const label = id => `${id} · ${studs[id].name || ''}${studs[id].class ? ' (' + studs[id].class + ')' : ''}`;
+
+  // จัดแถวเป็นกลุ่ม: ผ่าน / ต้องตรวจ / ข้าม
+  // เลข ปปช. ซ้ำกันในไฟล์ (ต่างเลขประจำตัว) → ข้ามทั้งกลุ่ม
+  const cnt = {}; rows.filter(r => validCid(r.cid)).forEach(r => (cnt[r.cid] = cnt[r.cid] || new Set()).add(r.sid));
+  const dupCid = new Set(Object.keys(cnt).filter(c => cnt[c].size > 1));
+  const bad = [], issues = [], okRows = [];
+  rows.forEach(r => {
+    if (!validCid(r.cid)) return bad.push(r);
+    if (dupCid.has(r.cid)) return;
+    if (!inMis(studs[r.sid])) { const sg = suggest(r); issues.push({ ...r, kind: 'nomis', sg, pick: sg || '' }); return; }
+    if (!nameOk(r.name, studs[r.sid].name)) { const sg = suggest(r); issues.push({ ...r, kind: 'name', sg, pick: sg || '' }); return; }
+    okRows.push({ ...r, target: r.sid });
+  });
+  // เลข ปปช. ที่ผูกกับนักเรียนคนอื่นในระบบอยู่แล้ว
+  const allValid = [...okRows, ...issues];
+  const keys = await Promise.all(allValid.map(r => cidKey(r.cid)));
+  const idx = await Promise.all(keys.map(k => F.getDoc(F.doc(db, 'cid_index', k))));
+  allValid.forEach((r, i) => { r.ck = keys[i]; r.owner = idx[i].exists() ? idx[i].data().sid : ''; });
+  loading(false);
+
+  const dupList = [...dupCid].map(c => rows.filter(r => r.cid === c));
+  const m = modal(`<div class="modal-h"><h3>ตรวจสอบก่อนนำเข้าเลขประจำตัวประชาชน</h3><button class="x" data-close>×</button></div>
+    <div class="modal-b">
+      <div class="alert ok small">ตรงกับ SchoolMIS พร้อมนำเข้า <b>${okRows.filter(r => !dupCid.has(r.cid)).length}</b> คน${noCid ? ` · ไม่มีเลข ปปช. ${noCid} แถว (ใช้รหัสเริ่มต้นแทน)` : ''}</div>
+      ${issues.length ? `<h4 style="margin:12px 0 4px">⚠️ เลขประจำตัวไม่ตรงกับ SchoolMIS (${issues.length})</h4>
+        <div class="small muted" style="margin-bottom:6px">ระบบยึดเลขประจำตัวตาม SchoolMIS — เลือกว่าจะผูกเลข ปปช. ให้ใคร</div>
+        <div class="tbl-wrap"><table class="tbl small"><thead><tr><th>ในไฟล์</th><th>ปัญหา</th><th>ผูกเลข ปปช. ให้</th></tr></thead><tbody>
+        ${issues.map((r, i) => `<tr><td>${esc(r.sid)} · ${esc(r.name)}<br><span class="muted">${esc(r.where)} · ${esc(fmtCid(r.cid))}</span></td>
+          <td>${r.kind === 'nomis' ? 'ไม่มีเลขประจำตัวนี้ใน SchoolMIS' : `ชื่อใน SchoolMIS คือ <b>${esc(studs[r.sid].name || '')}</b>`}${r.sg ? `<br><span style="color:var(--ok)">ชื่อตรงกับ ${esc(label(r.sg))}</span>` : ''}</td>
+          <td><select class="in" data-iss="${i}">${r.sg ? `<option value="${esc(r.sg)}" selected>ใช้ ${esc(r.sg)} (SchoolMIS)</option>` : ''}
+            ${r.kind === 'name' ? `<option value="${esc(r.sid)}">ใช้ ${esc(r.sid)} ตามไฟล์</option>` : ''}
+            <option value="" ${r.sg ? '' : 'selected'}>ข้าม (ไปแก้ไฟล์ก่อน)</option></select></td></tr>`).join('')}</tbody></table></div>
+        ${issues.some(r => r.sg) ? '<button class="btn sm" id="ci-all" style="margin-top:6px">ใช้เลขตาม SchoolMIS ทั้งหมดที่ชื่อตรง</button>' : ''}` : ''}
+      ${dupList.length ? `<h4 style="margin:12px 0 4px">⛔ เลข ปปช. ซ้ำกันในไฟล์ (${dupList.length}) — ข้าม</h4><div class="small">${dupList.map(g => `${esc(fmtCid(g[0].cid))}: ${g.map(r => esc(r.sid + ' ' + r.name)).join(' / ')}`).join('<br>')}</div>` : ''}
+      ${bad.length ? `<h4 style="margin:12px 0 4px">⛔ เลข ปปช. รูปแบบไม่ถูกต้อง (${bad.length}) — ข้าม</h4><div class="small">${bad.map(r => `${esc(r.sid)} ${esc(r.name)} — <code>${esc(r.cid)}</code> (${r.cid.length} หลัก) · ${esc(r.where)}`).join('<br>')}</div>` : ''}
+      <div id="ci-conf"></div>
+      <div class="small muted" style="margin-top:10px">นักเรียนที่เปิดใช้งานบัญชีแล้วยังใช้รหัสผ่านเดิมได้ · ไม่สร้างรายชื่อนักเรียนใหม่ที่ไม่มีใน SchoolMIS</div></div>
+    <div class="modal-f"><button class="btn" data-close>ยกเลิก</button><button class="btn pri" id="ci-ok">นำเข้า</button></div>`);
+  const plan = () => {
+    issues.forEach((r, i) => r.target = $(`[data-iss="${i}"]`, m).value);
+    const list = [...okRows, ...issues.filter(r => r.target)].filter(r => !dupCid.has(r.cid));
+    // เลขประจำตัวเดียวกันถูกเลือกหลายแถว
+    const seen = {}; list.forEach(r => (seen[r.target] = seen[r.target] || []).push(r));
+    const multi = Object.values(seen).filter(a => a.length > 1 && new Set(a.map(x => x.cid)).size > 1);
+    const conf = list.filter(r => r.owner && r.owner !== r.target);
+    $('#ci-conf', m).innerHTML = (multi.length ? `<div class="alert warn small" style="margin-top:10px">⛔ เลขประจำตัวเดียวกันได้เลข ปปช. ต่างกัน: ${multi.map(a => esc(a[0].target)).join(', ')} — จะข้ามรายการเหล่านี้</div>` : '')
+      + (conf.length ? `<div class="alert warn small" style="margin-top:10px">⚠️ เลข ปปช. ที่เคยผูกกับนักเรียนคนอื่น ${conf.length} รายการ: ${conf.map(r => esc(r.target) + ' ← เดิมของ ' + esc(r.owner)).join(', ')}<br>จะย้ายมาให้ตามไฟล์ (บัญชีที่เปิดใช้งานแล้วของคนเดิมไม่ถูกรีเซ็ต — ตรวจด้วย "ตรวจสอบทั้งหมด")</div>` : '');
+    const skip = new Set(multi.flat());
+    return list.filter(r => !skip.has(r));
+  };
+  $$('[data-iss]', m).forEach(x => x.onchange = plan);
+  const all = $('#ci-all', m); if (all) all.onclick = () => { issues.forEach((r, i) => { if (r.sg) $(`[data-iss="${i}"]`, m).value = r.sg; }); plan(); };
+  plan();
+  $('#ci-ok', m).onclick = () => quiet(run(async () => {
+    const list = plan();
+    if (!list.length) throw new Error('ไม่มีรายการที่จะนำเข้า');
+    loading(true, 'กำลังเตรียมข้อมูล...');
+    const [vers, secs] = await Promise.all([F.getDocs(R.col('student_ver')), F.getDocs(R.col('student_secrets'))]);
+    const ver = {}; vers.docs.forEach(d => ver[d.id] = Number(d.data().v || 0));
+    const sec = {}; secs.docs.forEach(d => sec[d.id] = d.data());
+    const ops = [];
+    for (const r of list) {
+      const sid = r.target, v = ver[sid] || 0, old = sec[sid] || {};
+      const ck = r.ck || await cidKey(r.cid);
+      if (old.ck && old.ck !== ck) ops.push(['del', F.doc(db, 'cid_index', old.ck)]);
+      ops.push(['set', R.secret(sid), { h: await codeHash(sid, r.cid), mode: 'cid', v, ck, cid: r.cid }]);
+      ops.push(['set', F.doc(db, 'cid_index', ck), { sid }]);
+      if (!(sid in ver)) ops.push(['set', R.ver(sid), { v: 0 }]);
+    }
+    for (let i = 0; i < ops.length; i += 450) {
+      loading(true, `กำลังบันทึก ${Math.min(i + 450, ops.length)}/${ops.length}`);
+      const b = F.writeBatch(db);
+      ops.slice(i, i + 450).forEach(([t, ref, data]) => t === 'del' ? b.delete(ref) : b.set(ref, data));
+      await b.commit();
+    }
+    closeModal();
+    const skipped = issues.filter(r => !r.target).length + dupList.flat().length + bad.length;
+    $('#cid-res').innerHTML = `<div class="alert ${skipped ? 'warn' : 'ok'} small" style="margin-top:10px">นำเข้าเรียบร้อย ${list.length} คน — นักเรียนเข้าสู่ระบบครั้งแรกด้วย เลขประจำตัวประชาชน + รหัสผ่าน = เลขประจำตัวนักเรียน${skipped ? `<br>⚠️ ข้าม ${skipped} แถว (เลขไม่ตรง SchoolMIS / เลข ปปช. ซ้ำ / รูปแบบผิด) — แก้ไฟล์แล้วนำเข้าใหม่ หรือใช้ปุ่ม "แก้เลข ปชช." รายคน` : ''}${noCid ? `<br>นักเรียนที่ไม่มีเลข ปปช. ใช้ "พิมพ์ใบรหัส" ในตารางด้านล่างแทน` : ''}</div>`;
+  }));
 }
 
 /* ---------------- รายวิชา–ครู ---------------- */
