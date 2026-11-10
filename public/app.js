@@ -594,7 +594,7 @@ VIEWS.grades = async (live) => {
   }
   const terms = S._terms;
   const mine = S.live.mine || [];
-  if (!terms.length) { v.innerHTML = '<div class="card empty">ยังไม่มีข้อมูลผลการเรียนในระบบ</div>'; return; }
+  if (!terms.length) { v.innerHTML = `<div class="card empty">ยังไม่มีข้อมูลผลการเรียนในระบบ<div class="small muted" style="margin-top:8px">${esc(S.me.name)} · เลขประจำตัว <b>${esc(S.me.sid)}</b><br>ถ้าชื่อหรือเลขประจำตัวไม่ใช่ของคุณ แจ้งงานวัดผลเพื่อแก้ไข</div></div>`; return; }
   const sel = S._termSel && terms.find(t => t.id === S._termSel) ? S._termSel : terms[0].id;
   S._termSel = sel;
   const fail = failSet();
@@ -1751,7 +1751,7 @@ VIEWS.students = async () => {
     const info = await Promise.all(list.map(async s => {
       const [sec, ln] = await Promise.all([F.getDoc(R.secret(s.id)), F.getDoc(R.link(s.id))]);
       const sd = sec.exists() ? sec.data() : {};
-      return { ...s, code: sd.code || '', mode: sd.mode || 'code', h: sd.h || '', v: sd.v || 0, active_acc: ln.exists(), dflt: ln.exists() && ln.data().dflt === true };
+      return { ...s, code: sd.code || '', mode: sd.mode || 'code', h: sd.h || '', ck: sd.ck || '', v: sd.v || 0, active_acc: ln.exists(), dflt: ln.exists() && ln.data().dflt === true };
     }));
     info.sort((a, b) => (Number(a.number) || 0) - (Number(b.number) || 0) || a.id.localeCompare(b.id));
     $('#sv-list').innerHTML = `<div class="row" style="margin:8px 0"><span class="small muted grow">${info.length} คน · เปิดใช้งานแล้ว ${info.filter(x => x.active_acc).length}</span>
@@ -1759,7 +1759,7 @@ VIEWS.students = async () => {
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>เลขที่</th><th>เลขประจำตัว</th><th>ชื่อ–สกุล</th><th>ชั้น</th><th>บัญชี</th><th>เข้าครั้งแรกด้วย</th><th></th></tr></thead><tbody>
       ${info.map(s => `<tr><td>${esc(s.number)}</td><td>${esc(s.id)}</td><td>${esc(s.name)}</td><td>${esc(s.class)}</td>
         <td>${s.active_acc ? (s.dflt ? '<span class="badge b-amber">ใช้รหัสเริ่มต้นอยู่</span>' : '<span class="badge b-green">เปิดใช้งานแล้ว</span>') : '<span class="badge b-gray">ยังไม่เปิด</span>'}</td>
-        <td class="small">${s.mode === 'cid' ? 'เลข ปชช. + เลขประจำตัว' : (s.active_acc ? '—' : `รหัสเริ่มต้น <code>${esc(s.code)}</code>`)}</td><td class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn sm" data-ename="${esc(s.id)}">แก้ชื่อ</button><button class="btn sm warn" data-reset="${esc(s.id)}">รีเซ็ตรหัส</button></td></tr>`).join('')}</tbody></table></div>`;
+        <td class="small">${s.mode === 'cid' ? 'เลข ปชช. + เลขประจำตัว' : (s.active_acc ? '—' : `รหัสเริ่มต้น <code>${esc(s.code)}</code>`)}</td><td class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn sm" data-ename="${esc(s.id)}">แก้ชื่อ</button><button class="btn sm" data-ecid="${esc(s.id)}">แก้เลข ปชช.</button><button class="btn sm warn" data-reset="${esc(s.id)}">รีเซ็ตรหัส</button></td></tr>`).join('')}</tbody></table></div>`;
     $$('[data-ename]').forEach(b => b.onclick = () => {
       const s = info.find(x => x.id === b.dataset.ename);
       const m = modal(`<div class="modal-h"><h3>แก้ไขชื่อนักเรียน ${esc(s.id)}</h3><button class="x" data-close>×</button></div>
@@ -1772,6 +1772,8 @@ VIEWS.students = async () => {
         closeModal(); toast('บันทึกแล้ว', 'ok'); const cls = $('#sv-cls').value; if (cls) loadCls(cls); else show([{ ...s, name: nm }]);
       }));
     });
+    $$('[data-ecid]').forEach(b => b.onclick = () => editCid(info.find(x => x.id === b.dataset.ecid), () => { const cls = $('#sv-cls').value; if (cls) loadCls(cls); else show([s0(b.dataset.ecid)]); }));
+    const s0 = id => { const x = info.find(y => y.id === id); return { id: x.id, name: x.name, class: x.class, number: x.number }; };
     $('#sv-print').onclick = () => printCodes(info.filter(x => !x.active_acc && x.code && x.mode !== 'cid').map(x => [x.id, x.name, x.class, x.code]));
     $$('[data-reset]').forEach(b => b.onclick = async () => {
       const s = info.find(x => x.id === b.dataset.reset);
@@ -1780,7 +1782,7 @@ VIEWS.students = async () => {
       quiet(run(async () => {
         const nv = s.v + 1; const code = cidMode ? '' : genCode();
         const bt = F.writeBatch(db);
-        bt.set(R.secret(s.id), cidMode ? { h: s.h, mode: 'cid', v: nv } : { h: await codeHash(s.id, code), code, v: nv });
+        bt.set(R.secret(s.id), cidMode ? { h: s.h, mode: 'cid', v: nv, ...(s.ck ? { ck: s.ck } : {}) } : { h: await codeHash(s.id, code), code, v: nv });
         bt.set(R.ver(s.id), { v: nv });
         bt.delete(R.link(s.id));
         await bt.commit();
@@ -1800,6 +1802,46 @@ VIEWS.students = async () => {
 };
 
 /** ไฟล์ต้นแบบนำเข้าเลขประจำตัวประชาชน (ตัวอย่างเป็นเลขสมมติ ผ่านหลักตรวจสอบ) */
+// แก้เลขประจำตัวประชาชนของนักเรียน 1 คน (ใบรายชื่อพิมพ์ผิด) — เก็บเฉพาะ hash เหมือนการนำเข้า
+function editCid(s, done) {
+  const m = modal(`<div class="modal-h"><h3>แก้เลขประจำตัวประชาชน</h3><button class="x" data-close>×</button></div>
+    <div class="modal-b"><div class="small" style="margin-bottom:10px"><b>${esc(s.name)}</b> · เลขประจำตัว ${esc(s.id)} · ${esc(s.class || '')}<br>
+      <span class="muted">${s.mode === 'cid' ? 'มีเลขประจำตัวประชาชนในระบบแล้ว (ระบบไม่แสดงเลขเดิม เพราะเก็บแบบเข้ารหัส)' : 'ยังไม่มีเลขประจำตัวประชาชนในระบบ'}</span></div>
+      <label class="f"><span>เลขประจำตัวประชาชนที่ถูกต้อง (13 หลัก)</span><input class="in" id="ec-cid" inputmode="numeric" maxlength="17" autocomplete="off"></label>
+      <div class="small muted">${s.active_acc ? 'นักเรียนเปิดใช้งานบัญชีแล้ว — รหัสผ่านเดิมยังใช้ได้ หลังแก้จะเข้าด้วยเลขประชาชนใหม่หรือเลขประจำตัวก็ได้' : 'หลังแก้ นักเรียนเข้าครั้งแรกด้วย เลขประจำตัวประชาชนใหม่ + รหัสผ่าน = เลขประจำตัวนักเรียน'}</div></div>
+    <div class="modal-f"><button class="btn" data-close>ยกเลิก</button><button class="btn pri" id="ec-ok">บันทึก</button></div>`);
+  $('#ec-ok', m).onclick = () => quiet(run(async () => {
+    const cid = $('#ec-cid', m).value.replace(/\D/g, '');
+    if (!validCid(cid)) throw new Error('เลขประจำตัวประชาชนไม่ถูกต้อง (ต้องมี 13 หลัก และหลักสุดท้ายต้องตรงตามหลักตรวจสอบ)');
+    const ck = await cidKey(cid);
+    const cur = await F.getDoc(F.doc(db, 'cid_index', ck));
+    const other = cur.exists() && cur.data().sid !== s.id ? cur.data().sid : null;
+    let oInfo = null;
+    if (other) {
+      const [os, osec, oln] = await Promise.all([F.getDoc(R.student(other)), F.getDoc(R.secret(other)), F.getDoc(R.link(other))]);
+      oInfo = { name: os.exists() ? os.data().name || other : other, v: osec.exists() ? Number(osec.data().v || 0) : 0, active: oln.exists() };
+      closeModal();
+      if (!await confirmDlg('เลขนี้ผูกกับนักเรียนคนอื่นอยู่', `เลขประจำตัวประชาชนนี้ถูกผูกไว้กับ <b>${esc(oInfo.name)}</b> (${esc(other)})<br><br>ย้ายมาให้ <b>${esc(s.name)}</b> (${esc(s.id)}) และ<b>รีเซ็ตบัญชีของ ${esc(other)}</b> ให้ใช้รหัสเริ่มต้น 6 ตัวแทน?${oInfo.active ? '<br><span class="small" style="color:var(--bad)">บัญชี ' + esc(other) + ' เปิดใช้งานแล้ว (อาจเป็นนักเรียนที่เข้าผิดบัญชี) — รหัสผ่านเดิมของบัญชีนั้นจะใช้ไม่ได้</span>' : ''}`, 'ย้ายและรีเซ็ต', 'bad')) return;
+    }
+    const bt = F.writeBatch(db);
+    if (s.ck && s.ck !== ck) bt.delete(F.doc(db, 'cid_index', s.ck));
+    bt.set(F.doc(db, 'cid_index', ck), { sid: s.id });
+    bt.set(R.secret(s.id), { h: await codeHash(s.id, cid), mode: 'cid', v: s.v || 0, ck });
+    if (!s.ck && s.mode !== 'cid') bt.set(R.ver(s.id), { v: s.v || 0 }, { merge: true });
+    let code = '';
+    if (other) {
+      const nv = oInfo.v + 1; code = genCode();
+      bt.set(R.secret(other), { h: await codeHash(other, code), code, v: nv });
+      bt.set(R.ver(other), { v: nv });
+      bt.delete(R.link(other));
+    }
+    await bt.commit();
+    closeModal();
+    await confirmDlg('บันทึกแล้ว', `<div class="center">${esc(s.name)} (${esc(s.id)})<br>เข้าสู่ระบบด้วย เลขประจำตัวประชาชนใหม่${s.active_acc ? ' + รหัสผ่านที่ตั้งไว้' : ' + รหัสผ่าน = <b>' + esc(s.id) + '</b>'}</div>${other ? `<hr><div class="center">บัญชี ${esc(oInfo.name)} (${esc(other)})<br>ถูกรีเซ็ต — รหัสเริ่มต้นใหม่<div style="font-size:2rem;letter-spacing:.2em;font-weight:700;margin:10px">${code}</div></div>` : ''}`, 'ตกลง');
+    done && done();
+  }));
+}
+
 async function downloadCidTemplate() {
   await loadXLSX();
   const mk = b12 => { let s = 0; for (let i = 0; i < 12; i++) s += Number(b12[i]) * (13 - i); return b12 + ((11 - s % 11) % 10); };
@@ -1874,8 +1916,9 @@ async function importCid(file) {
   for (const sid of sids) {
     const { cid, name } = found[sid];
     const v = vers[sid] || 0;
-    ops.push([R.secret(sid), { h: await codeHash(sid, cid), mode: 'cid', v }, false]);
-    ops.push([F.doc(db, 'cid_index', await cidKey(cid)), { sid }, false]);
+    const ck = await cidKey(cid);
+    ops.push([R.secret(sid), { h: await codeHash(sid, cid), mode: 'cid', v, ck }, false]);
+    ops.push([F.doc(db, 'cid_index', ck), { sid }, false]);
     if (!(sid in vers)) ops.push([R.ver(sid), { v: 0 }, false]);
     const st = studs[sid];
     if (!st) ops.push([R.student(sid), { name, class: '', number: '', active: true, updated_at: F.serverTimestamp() }, false]);
