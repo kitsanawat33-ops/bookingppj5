@@ -1742,11 +1742,11 @@ VIEWS.students = async () => {
   const meta = await F.getDoc(R.meta());
   const classes = (meta.exists() ? meta.data().classes || [] : []).slice().sort((a, b) => a.localeCompare(b, 'th', { numeric: true }));
   v.innerHTML = `<div class="card" style="border-color:#c7d2fe"><h3>นำเข้าเลขประจำตัวประชาชน (สำหรับเข้าสู่ระบบครั้งแรก)</h3>
-      <p class="small muted" style="margin-top:0">เลือกไฟล์ Excel รายชื่อนักเรียนที่มีคอลัมน์ <b>เลข ปปช.</b> และ <b>เลขประจำตัว</b> (อ่านทุกชีต) — ยึด<b>เลขประจำตัวตาม SchoolMIS</b> เป็นหลัก — แถวที่เลขไม่ตรงจะแจ้งให้ตรวจก่อนนำเข้า · เลขประจำตัวประชาชนเห็นได้เฉพาะผู้ดูแลและงานวัดผล<br>
+      <p class="small muted" style="margin-top:0">เลือกไฟล์รายชื่อนักเรียน <b>Excel หรือ CSV</b> ที่มีคอลัมน์ <b>เลขประจำตัว</b> และ <b>เลขประชาชน</b> (หรือ เลข ปปช.) — ใช้ไฟล์รายชื่อนักเรียนที่ส่งออกจาก SchoolMIS/DMC ได้ทันที (อ่านทุกชีต) — ยึด<b>เลขประจำตัวตาม SchoolMIS</b> เป็นหลัก — แถวที่เลขไม่ตรงจะแจ้งให้ตรวจก่อนนำเข้า · เลขประจำตัวประชาชนเห็นได้เฉพาะผู้ดูแลและงานวัดผล<br>
       นักเรียนเข้าครั้งแรก: ชื่อผู้ใช้ = เลขประจำตัวประชาชน · รหัสผ่าน = เลขประจำตัวนักเรียน</p>
       <div class="row" style="margin-bottom:8px"><button class="btn sm" id="cid-tpl">⬇️ ดาวน์โหลดไฟล์ต้นแบบ (Excel)</button>
-      <span class="small muted">กรอกตามต้นแบบ แยกชีตตามห้องได้ · คอลัมน์ที่จำเป็น: <b>เลข ปปช.</b> และ <b>เลขประจำตัว</b></span></div>
-      <input type="file" class="in" id="cid-file" accept=".xlsx,.xls,.csv"><div id="cid-res"></div></div>
+      <span class="small muted">กรอกตามต้นแบบ แยกชีตตามห้องได้ · คอลัมน์ที่จำเป็น: <b>เลขประจำตัว</b> และ <b>เลขประชาชน</b> (หรือ เลข ปปช.)</span></div>
+      <input type="file" class="in" id="cid-file" accept=".xlsx,.xls,.csv,text/csv"><div id="cid-res"></div></div>
     <div class="card"><div class="row"><h3 class="grow" style="margin:0">ตรวจสอบความถูกต้องของข้อมูลนักเรียน</h3><button class="btn sm" id="sv-audit">🔍 ตรวจสอบทั้งหมด</button></div>
       <div id="sv-audit-res" class="small muted" style="margin-top:6px">ตรวจหา: เลขประจำตัวที่ไม่มีใน SchoolMIS · เลขประจำตัวประชาชนซ้ำ/รูปแบบผิด · นักเรียนที่ยังไม่มีเลขประชาชน</div></div>
     <div class="card"><div class="row">
@@ -1941,17 +1941,22 @@ async function downloadCidTemplate() {
 /** อ่าน Excel รายชื่อ (ทุกชีต) → เก็บ hash(เลขประจำตัว|เลขประชาชน) + ดัชนี hash(เลขประชาชน) → เลขประจำตัว (ไม่เก็บเลขจริง) */
 async function importCid(file) {
   await loadXLSX();
-  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+  // CSV (เช่น ไฟล์รายชื่อนักเรียนจาก SchoolMIS/DMC) อ่านเป็นข้อความ UTF-8 เพื่อไม่ให้ภาษาไทยเพี้ยน
+  const wb = /\.csv$/i.test(file.name)
+    ? XLSX.read((await file.text()).replace(/^\uFEFF/, ''), { type: 'string', raw: true })
+    : XLSX.read(await file.arrayBuffer(), { type: 'array' });
+  const CIDH = /เลข\s*(ปปช|ปชช|ประจำตัวประชาชน|บัตรประชาชน|ประชาชน)/;
   const rows = []; let noCid = 0;
   wb.SheetNames.forEach(sn => {
     const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: '', raw: true });
-    const hr = aoa.slice(0, 12).findIndex(r => r.some(c => /เลข\s*(ปปช|ปชช|ประจำตัวประชาชน|บัตรประชาชน)/.test(String(c))));
+    const hr = aoa.slice(0, 12).findIndex(r => r.some(c => CIDH.test(String(c))));
     if (hr < 0) return;
     const h = aoa[hr].map(c => String(c).trim());
-    const cC = h.findIndex(c => /เลข\s*(ปปช|ปชช|ประจำตัวประชาชน|บัตรประชาชน)/.test(c));
+    const cC = h.findIndex(c => CIDH.test(c));
     const sC = h.findIndex((c, i) => i !== cC && /^(เลขประจำตัว|เลขประจำตัวนักเรียน|รหัสนักเรียน)$/.test(c.replace(/\s+/g, '')));
     if (sC < 0) return;
-    const pC = h.findIndex(c => /คำนำหน้า/.test(c)), nC = h.findIndex(c => /^ชื่อ$/.test(c) || /^ชื่อ-?สกุล$|^ชื่อ–สกุล$/.test(c)), lC = h.findIndex(c => /^(นาม)?สกุล$/.test(c));
+    const gC = h.findIndex(c => /^(ระดับชั้น|ชั้น)$/.test(c)), rC = h.findIndex(c => /^ห้อง$/.test(c));
+    const pC = h.findIndex(c => /คำ(นำ)?หน้า/.test(c)), nC = h.findIndex(c => /^ชื่อ$/.test(c) || /^ชื่อ-?สกุล$|^ชื่อ–สกุล$/.test(c)), lC = h.findIndex(c => /^(นาม)?สกุล$/.test(c));
     aoa.slice(hr + 1).forEach((r, i) => {
       const sid = String(r[sC] == null ? '' : r[sC]).trim();
       if (!/^\d+$/.test(sid)) return;
@@ -1959,8 +1964,9 @@ async function importCid(file) {
       const cid = (typeof raw === 'number' ? String(Math.round(raw)) : String(raw || '')).replace(/\D/g, '');
       const parts = [pC >= 0 ? r[pC] : '', nC >= 0 ? r[nC] : '', lC >= 0 && lC !== nC ? r[lC] : ''].map(x => String(x || '').trim()).filter(Boolean);
       const name = parts.length > 1 && pC >= 0 ? parts[0] + parts[1] + (parts[2] ? ' ' + parts[2] : '') : parts.join(' ');
+      const cls = gC >= 0 ? String(r[gC] || '').trim() + (rC >= 0 && String(r[rC] || '').trim() ? '/' + String(r[rC]).trim() : '') : '';
       if (!cid) { noCid++; return; }
-      rows.push({ sid: lowerSid(sid), cid, name, where: `${sn} แถว ${hr + i + 2}` });
+      rows.push({ sid: lowerSid(sid), cid, name, cls, where: `${wb.SheetNames.length > 1 ? sn + ' ' : ''}แถว ${hr + i + 2}` });
     });
   });
   if (!rows.length && !noCid) throw new Error('ไม่พบคอลัมน์ "เลข ปปช." และ "เลขประจำตัว" ในไฟล์');
@@ -1970,18 +1976,22 @@ async function importCid(file) {
   const mis = Object.keys(studs).filter(id => inMis(studs[id]));
   const byName = {}; mis.forEach(id => { const k = stuName(studs[id].name); if (k) (byName[k] = byName[k] || []).push(id); });
   const nameOk = (a, b) => !a || !b || stuName(a) === stuName(b);
-  const suggest = r => { const c = (byName[stuName(r.name)] || []).filter(id => id !== r.sid); return c.length === 1 ? c[0] : ''; };
+  const suggest = r => {
+    let c = (byName[stuName(r.name)] || []).filter(id => id !== r.sid);
+    if (c.length > 1 && r.cls) { const same = c.filter(id => String(studs[id].class || '').replace(/\s/g, '') === r.cls.replace(/\s/g, '')); if (same.length) c = same; }
+    return c.length === 1 ? c[0] : '';
+  };
   const label = id => `${id} · ${studs[id].name || ''}${studs[id].class ? ' (' + studs[id].class + ')' : ''}`;
 
   // จัดแถวเป็นกลุ่ม: ผ่าน / ต้องตรวจ / ข้าม
   // เลข ปปช. ซ้ำกันในไฟล์ (ต่างเลขประจำตัว) → ข้ามทั้งกลุ่ม
   const cnt = {}; rows.filter(r => validCid(r.cid)).forEach(r => (cnt[r.cid] = cnt[r.cid] || new Set()).add(r.sid));
   const dupCid = new Set(Object.keys(cnt).filter(c => cnt[c].size > 1));
-  const bad = [], issues = [], okRows = [];
+  const bad = [], issues = [], okRows = [], absent = [];
   rows.forEach(r => {
     if (!validCid(r.cid)) return bad.push(r);
     if (dupCid.has(r.cid)) return;
-    if (!inMis(studs[r.sid])) { const sg = suggest(r); issues.push({ ...r, kind: 'nomis', sg, pick: sg || '' }); return; }
+    if (!inMis(studs[r.sid])) { const sg = suggest(r); if (sg) issues.push({ ...r, kind: 'nomis', sg, pick: sg }); else absent.push(r); return; }
     if (!nameOk(r.name, studs[r.sid].name)) { const sg = suggest(r); issues.push({ ...r, kind: 'name', sg, pick: sg || '' }); return; }
     okRows.push({ ...r, target: r.sid });
   });
@@ -1999,12 +2009,14 @@ async function importCid(file) {
       ${issues.length ? `<h4 style="margin:12px 0 4px">⚠️ เลขประจำตัวไม่ตรงกับ SchoolMIS (${issues.length})</h4>
         <div class="small muted" style="margin-bottom:6px">ระบบยึดเลขประจำตัวตาม SchoolMIS — เลือกว่าจะผูกเลข ปปช. ให้ใคร</div>
         <div class="tbl-wrap"><table class="tbl small"><thead><tr><th>ในไฟล์</th><th>ปัญหา</th><th>ผูกเลข ปปช. ให้</th></tr></thead><tbody>
-        ${issues.map((r, i) => `<tr><td>${esc(r.sid)} · ${esc(r.name)}<br><span class="muted">${esc(r.where)} · ${esc(fmtCid(r.cid))}</span></td>
+        ${issues.map((r, i) => `<tr><td>${esc(r.sid)} · ${esc(r.name)}${r.cls ? ' · ' + esc(r.cls) : ''}<br><span class="muted">${esc(r.where)} · ${esc(fmtCid(r.cid))}</span></td>
           <td>${r.kind === 'nomis' ? 'ไม่มีเลขประจำตัวนี้ใน SchoolMIS' : `ชื่อใน SchoolMIS คือ <b>${esc(studs[r.sid].name || '')}</b>`}${r.sg ? `<br><span style="color:var(--ok)">ชื่อตรงกับ ${esc(label(r.sg))}</span>` : ''}</td>
           <td><select class="in" data-iss="${i}">${r.sg ? `<option value="${esc(r.sg)}" selected>ใช้ ${esc(r.sg)} (SchoolMIS)</option>` : ''}
             ${r.kind === 'name' ? `<option value="${esc(r.sid)}">ใช้ ${esc(r.sid)} ตามไฟล์</option>` : ''}
-            <option value="" ${r.sg ? '' : 'selected'}>ข้าม (ไปแก้ไฟล์ก่อน)</option></select></td></tr>`).join('')}</tbody></table></div>
+            <option value="" ${r.sg ? '' : 'selected'}>ข้าม</option></select></td></tr>`).join('')}</tbody></table></div>
         ${issues.some(r => r.sg) ? '<button class="btn sm" id="ci-all" style="margin-top:6px">ใช้เลขตาม SchoolMIS ทั้งหมดที่ชื่อตรง</button>' : ''}` : ''}
+      ${absent.length ? `<details style="margin-top:12px"><summary><b>ไม่มีในระบบ ${absent.length} คน — ข้าม</b> <span class="small muted">(เลขประจำตัวไม่มีใน SchoolMIS และไม่พบชื่อที่ตรงกัน เช่น ชั้นที่ยังไม่ได้นำเข้าผลการเรียน หรือเลขประจำตัวผิด)</span></summary>
+        <div class="small" style="max-height:200px;overflow:auto;margin-top:6px">${(() => { const g = {}; absent.forEach(r => (g[r.cls || '-'] = g[r.cls || '-'] || []).push(r)); return Object.keys(g).sort((a, b) => a.localeCompare(b, 'th', { numeric: true })).map(k => `<div><b>${esc(k)}</b> (${g[k].length}): ${g[k].map(r => esc(r.sid + ' ' + r.name)).join(', ')}</div>`).join(''); })()}</div></details>` : ''}
       ${dupList.length ? `<h4 style="margin:12px 0 4px">⛔ เลข ปปช. ซ้ำกันในไฟล์ (${dupList.length}) — ข้าม</h4><div class="small">${dupList.map(g => `${esc(fmtCid(g[0].cid))}: ${g.map(r => esc(r.sid + ' ' + r.name)).join(' / ')}`).join('<br>')}</div>` : ''}
       ${bad.length ? `<h4 style="margin:12px 0 4px">⛔ เลข ปปช. รูปแบบไม่ถูกต้อง (${bad.length}) — ข้าม</h4><div class="small">${bad.map(r => `${esc(r.sid)} ${esc(r.name)} — <code>${esc(r.cid)}</code> (${r.cid.length} หลัก) · ${esc(r.where)}`).join('<br>')}</div>` : ''}
       <div id="ci-conf"></div>
@@ -2048,7 +2060,7 @@ async function importCid(file) {
       await b.commit();
     }
     closeModal();
-    const skipped = issues.filter(r => !r.target).length + dupList.flat().length + bad.length;
+    const skipped = issues.filter(r => !r.target).length + dupList.flat().length + bad.length + absent.length;
     $('#cid-res').innerHTML = `<div class="alert ${skipped ? 'warn' : 'ok'} small" style="margin-top:10px">นำเข้าเรียบร้อย ${list.length} คน — นักเรียนเข้าสู่ระบบครั้งแรกด้วย เลขประจำตัวประชาชน + รหัสผ่าน = เลขประจำตัวนักเรียน${skipped ? `<br>⚠️ ข้าม ${skipped} แถว (เลขไม่ตรง SchoolMIS / เลข ปปช. ซ้ำ / รูปแบบผิด) — แก้ไฟล์แล้วนำเข้าใหม่ หรือใช้ปุ่ม "แก้เลข ปชช." รายคน` : ''}${noCid ? `<br>นักเรียนที่ไม่มีเลข ปปช. ใช้ "พิมพ์ใบรหัส" ในตารางด้านล่างแทน` : ''}</div>`;
   }));
 }
