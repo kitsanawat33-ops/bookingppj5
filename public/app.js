@@ -346,6 +346,7 @@ function stuLoginForm() {
 async function getVer(sid) {
   const s = await F.getDoc(R.ver(sid));
   if (!s.exists()) throw new Error('ไม่พบเลขประจำตัวนี้ในระบบ');
+  if (s.data().moved_to) throw new Error('เลขประจำตัวนี้ถูกแก้เป็น ' + s.data().moved_to + ' แล้ว กรุณาเข้าสู่ระบบด้วยเลขใหม่ หรือเลขประจำตัวประชาชน');
   return Number(s.data().v || 0);
 }
 
@@ -1759,7 +1760,7 @@ VIEWS.students = async () => {
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>เลขที่</th><th>เลขประจำตัว</th><th>ชื่อ–สกุล</th><th>ชั้น</th><th>บัญชี</th><th>เข้าครั้งแรกด้วย</th><th></th></tr></thead><tbody>
       ${info.map(s => `<tr><td>${esc(s.number)}</td><td>${esc(s.id)}</td><td>${esc(s.name)}</td><td>${esc(s.class)}</td>
         <td>${s.active_acc ? (s.dflt ? '<span class="badge b-amber">ใช้รหัสเริ่มต้นอยู่</span>' : '<span class="badge b-green">เปิดใช้งานแล้ว</span>') : '<span class="badge b-gray">ยังไม่เปิด</span>'}</td>
-        <td class="small">${s.mode === 'cid' ? 'เลข ปชช. + เลขประจำตัว' : (s.active_acc ? '—' : `รหัสเริ่มต้น <code>${esc(s.code)}</code>`)}</td><td class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn sm" data-ename="${esc(s.id)}">แก้ชื่อ</button><button class="btn sm" data-ecid="${esc(s.id)}">แก้เลข ปชช.</button><button class="btn sm warn" data-reset="${esc(s.id)}">รีเซ็ตรหัส</button></td></tr>`).join('')}</tbody></table></div>`;
+        <td class="small">${s.mode === 'cid' ? 'เลข ปชช. + เลขประจำตัว' : (s.active_acc ? '—' : `รหัสเริ่มต้น <code>${esc(s.code)}</code>`)}</td><td class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn sm" data-ename="${esc(s.id)}">แก้ชื่อ</button><button class="btn sm" data-ecid="${esc(s.id)}">แก้เลข ปชช.</button><button class="btn sm" data-esid="${esc(s.id)}">แก้เลขประจำตัว</button><button class="btn sm warn" data-reset="${esc(s.id)}">รีเซ็ตรหัส</button></td></tr>`).join('')}</tbody></table></div>`;
     $$('[data-ename]').forEach(b => b.onclick = () => {
       const s = info.find(x => x.id === b.dataset.ename);
       const m = modal(`<div class="modal-h"><h3>แก้ไขชื่อนักเรียน ${esc(s.id)}</h3><button class="x" data-close>×</button></div>
@@ -1773,6 +1774,7 @@ VIEWS.students = async () => {
       }));
     });
     $$('[data-ecid]').forEach(b => b.onclick = () => editCid(info.find(x => x.id === b.dataset.ecid), () => { const cls = $('#sv-cls').value; if (cls) loadCls(cls); else show([s0(b.dataset.ecid)]); }));
+    $$('[data-esid]').forEach(b => b.onclick = () => editSid(info.find(x => x.id === b.dataset.esid), nsid => { const cls = $('#sv-cls').value; if (cls) loadCls(cls); else $('#sv-sid').value = nsid, $('#sv-find').click(); }));
     const s0 = id => { const x = info.find(y => y.id === id); return { id: x.id, name: x.name, class: x.class, number: x.number }; };
     $('#sv-print').onclick = () => printCodes(info.filter(x => !x.active_acc && x.code && x.mode !== 'cid').map(x => [x.id, x.name, x.class, x.code]));
     $$('[data-reset]').forEach(b => b.onclick = async () => {
@@ -1839,6 +1841,73 @@ function editCid(s, done) {
     closeModal();
     await confirmDlg('บันทึกแล้ว', `<div class="center">${esc(s.name)} (${esc(s.id)})<br>เข้าสู่ระบบด้วย เลขประจำตัวประชาชนใหม่${s.active_acc ? ' + รหัสผ่านที่ตั้งไว้' : ' + รหัสผ่าน = <b>' + esc(s.id) + '</b>'}</div>${other ? `<hr><div class="center">บัญชี ${esc(oInfo.name)} (${esc(other)})<br>ถูกรีเซ็ต — รหัสเริ่มต้นใหม่<div style="font-size:2rem;letter-spacing:.2em;font-weight:700;margin:10px">${code}</div></div>` : ''}`, 'ตกลง');
     done && done();
+  }));
+}
+
+// เปลี่ยนเลขประจำตัวนักเรียน (ใบรายชื่อ/ปพ.6 ใส่เลขผิด) — ย้ายผลการเรียน + ตั้งบัญชีใหม่ แล้วลบรายการเลขเดิม
+function editSid(s, done) {
+  const m = modal(`<div class="modal-h"><h3>แก้เลขประจำตัวนักเรียน</h3><button class="x" data-close>×</button></div>
+    <div class="modal-b"><div class="small" style="margin-bottom:10px"><b>${esc(s.name)}</b> · เลขประจำตัวเดิม <b>${esc(s.id)}</b> · ${esc(s.class || '')}</div>
+      <label class="f"><span>เลขประจำตัวที่ถูกต้อง</span><input class="in" id="es-sid" inputmode="numeric" autocomplete="off"></label>
+      <label class="f"><span>เลขประจำตัวประชาชน (ไม่บังคับ — ใส่แล้วนักเรียนเข้าด้วยเลข ปชช. ได้ทันที)</span><input class="in" id="es-cid" inputmode="numeric" maxlength="17" autocomplete="off"></label>
+      <div class="alert info small">• ถ้ายังไม่มีเลขใหม่ในระบบ: ย้ายผลการเรียนทุกภาคเรียนไปเลขใหม่<br>• ถ้ามีเลขใหม่อยู่แล้ว (เช่น นำเข้า ปพ.6 ที่ถูกต้องแล้ว): รวมเข้าด้วยกัน ใช้ผลการเรียนของเลขใหม่เป็นหลัก<br>• จากนั้นลบรายการเลขเดิม และบัญชีเดิมจะใช้ไม่ได้ — นักเรียนเข้าใหม่ด้วยเลข ปชช. (ถ้าใส่) หรือรหัสเริ่มต้นที่ระบบออกให้<br>• ควรแก้เลขใน SchoolMIS ด้วย ไม่เช่นนั้นการนำเข้า ปพ.6 ครั้งต่อไปจะสร้างเลขเดิมกลับมา</div></div>
+    <div class="modal-f"><button class="btn" data-close>ยกเลิก</button><button class="btn pri" id="es-ok">ตรวจสอบ</button></div>`);
+  $('#es-ok', m).onclick = () => quiet(run(async () => {
+    const ns = lowerSid($('#es-sid', m).value);
+    const cid = $('#es-cid', m).value.replace(/\D/g, '');
+    if (!/^\d{1,10}$/.test(ns)) throw new Error('เลขประจำตัวต้องเป็นตัวเลข');
+    if (ns === s.id) throw new Error('เลขใหม่เหมือนเลขเดิม');
+    if (cid && !validCid(cid)) throw new Error('เลขประจำตัวประชาชนไม่ถูกต้อง');
+    const reqs = await F.getDocs(F.query(R.col('requests'), F.where('student_id', '==', s.id)));
+    const liveReq = reqs.docs.filter(d => d.data().status !== 'CANCELLED');
+    if (liveReq.length) throw new Error(`เลขเดิมมีคำร้อง ${liveReq.length} รายการ ย้ายอัตโนมัติไม่ได้ — ให้ยกเลิก/ปิดคำร้องก่อน หรือแจ้งผู้พัฒนา`);
+    const [oldTerms, newTerms, ns0, osec] = await Promise.all([
+      F.getDocs(F.query(R.col('terms'), F.where('student_id', '==', s.id))).then(snapList),
+      F.getDocs(F.query(R.col('terms'), F.where('student_id', '==', ns))).then(snapList),
+      F.getDoc(R.student(ns)), F.getDoc(R.secret(s.id))]);
+    const merge = ns0.exists();
+    const have = new Set(newTerms.map(t => t.academic_year + '/' + t.semester));
+    const move = oldTerms.filter(t => !have.has(t.academic_year + '/' + t.semester));
+    const ck = cid ? await cidKey(cid) : '';
+    let other = null;
+    if (ck) { const cur = await F.getDoc(F.doc(db, 'cid_index', ck)); if (cur.exists() && ![s.id, ns].includes(cur.data().sid)) other = cur.data().sid; }
+    closeModal();
+    if (!await confirmDlg('ยืนยันแก้เลขประจำตัว', `<b>${esc(s.name)}</b><br>${esc(s.id)} → <b>${esc(ns)}</b>${merge ? ` <span class="badge b-amber">มีเลข ${esc(ns)} ในระบบแล้ว: ${esc(ns0.data().name || '')}</span>` : ''}
+      <ul class="small" style="margin:8px 0 0;padding-left:18px">
+        <li>ย้ายผลการเรียน ${move.length} ภาคเรียน${oldTerms.length - move.length ? ` (ข้าม ${oldTerms.length - move.length} ภาคเรียนที่เลขใหม่มีอยู่แล้ว)` : ''}</li>
+        <li>ลบรายการเลข ${esc(s.id)} และบัญชีเดิม</li>
+        <li>บัญชีเลข ${esc(ns)}: ${cid ? 'เข้าด้วยเลข ปชช. + รหัสผ่าน = ' + esc(ns) : merge ? 'ใช้บัญชีของเลขใหม่ตามเดิม (ถ้ามี) หรือออกรหัสเริ่มต้นใหม่' : 'ออกรหัสเริ่มต้น 6 ตัวใหม่'}</li>
+        ${other ? `<li style="color:var(--bad)">เลข ปชช. นี้ผูกกับ ${esc(other)} อยู่ — จะย้ายมาและรีเซ็ตบัญชี ${esc(other)}</li>` : ''}</ul>`, 'แก้เลขประจำตัว', 'bad')) return;
+    loading(true, 'กำลังย้ายข้อมูล...');
+    const [nsec, nver, oInfo] = await Promise.all([F.getDoc(R.secret(ns)), F.getDoc(R.ver(ns)),
+      other ? F.getDoc(R.secret(other)) : null]);
+    const nv = (nsec.exists() ? Number(nsec.data().v || 0) : nver.exists() ? Number(nver.data().v || 0) : -1) + 1;
+    const keepNew = merge && nsec.exists() && !cid;   // เลขใหม่มีบัญชีอยู่แล้ว และไม่ได้ใส่เลข ปชช. → ใช้บัญชีเดิมของเลขใหม่
+    const code = cid || keepNew ? '' : genCode(); const ocode = other ? genCode() : '';
+    const bt = F.writeBatch(db);
+    const sd = { ...s }; ['id', 'code', 'mode', 'h', 'ck', 'v', 'active_acc', 'dflt'].forEach(k => delete sd[k]);
+    if (!merge) bt.set(R.student(ns), { ...sd, updated_at: F.serverTimestamp() });
+    move.forEach(t => { const { id, ...td } = t; bt.set(R.term(ns + '_' + t.academic_year + '_' + t.semester), { ...td, student_id: ns }); });
+    oldTerms.forEach(t => bt.delete(R.term(t.id)));
+    bt.delete(R.student(s.id)); bt.delete(R.secret(s.id)); bt.delete(R.link(s.id));
+    bt.set(R.ver(s.id), { v: (s.v || 0) + 1, moved_to: ns });
+    if (osec.exists() && osec.data().ck) bt.delete(F.doc(db, 'cid_index', osec.data().ck));
+    if (nsec.exists() && nsec.data().ck && nsec.data().ck !== ck && cid) bt.delete(F.doc(db, 'cid_index', nsec.data().ck));
+    if (!keepNew) {
+      bt.set(R.secret(ns), cid ? { h: await codeHash(ns, cid), mode: 'cid', v: nv, ck } : { h: await codeHash(ns, code), code, v: nv });
+      bt.set(R.ver(ns), { v: nv });
+      bt.delete(R.link(ns));
+    }
+    if (ck) bt.set(F.doc(db, 'cid_index', ck), { sid: ns });
+    if (other) {
+      const ov = (oInfo && oInfo.exists() ? Number(oInfo.data().v || 0) : 0) + 1;
+      bt.set(R.secret(other), { h: await codeHash(other, ocode), code: ocode, v: ov });
+      bt.set(R.ver(other), { v: ov }); bt.delete(R.link(other));
+    }
+    await bt.commit();
+    loading(false);
+    await confirmDlg('แก้เลขประจำตัวแล้ว', `<div class="center">${esc(s.name)}<br>เลขประจำตัว <b>${esc(ns)}</b><br>${cid ? 'เข้าสู่ระบบด้วย เลขประจำตัวประชาชน + รหัสผ่าน = <b>' + esc(ns) + '</b>' : keepNew ? 'ใช้บัญชีของเลข ' + esc(ns) + ' ตามเดิม' : `รหัสเริ่มต้นใหม่<div style="font-size:2rem;letter-spacing:.2em;font-weight:700;margin:10px">${code}</div>`}</div>${other ? `<hr><div class="center">บัญชี ${esc(other)} ถูกรีเซ็ต — รหัสเริ่มต้นใหม่<div style="font-size:2rem;letter-spacing:.2em;font-weight:700;margin:10px">${ocode}</div></div>` : ''}`, 'ตกลง');
+    done && done(ns);
   }));
 }
 
